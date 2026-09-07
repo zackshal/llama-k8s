@@ -1,0 +1,4 @@
+---
+- name: restart logrotate
+  command: /usr/sbin/logrotate -f /etc/logrotate.conf
+  ignore_errors: yes

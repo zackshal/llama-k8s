@@ -1,0 +1,83 @@
+---
+- name: Determine system architecture
+  set_fact:
+    arch: "{{ ansible_facts['architecture'] }}"
+
+- name: Check if architecture is supported by official Kubernetes packages
+  set_fact:
+    k8s_supported: "{{ arch in ['x86_64', 'aarch64', 'arm64'] }}"
+
+- name: Fallback to K3s if architecture is unsupported
+  set_fact:
+    orchestrator: "k3s"
+  when: not k8s_supported
+
+- name: Install Kubernetes packages (only on supported architectures)
+  block:
+    - name: Add Kubernetes repository
+      apt:
+        name: apt-transport-https
+        state: present
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Add Kubernetes GPG key
+      apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Add Kubernetes repository
+      apt_repository:
+        repo: "deb https://apt.kubernetes.io/ kubernetes-xenial main"
+        state: present
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Install Kubernetes packages (kubeadm, kubelet, kubectl)
+      apt:
+        name:
+          - kubelet={{ kubernetes_version }}-00
+          - kubeadm={{ kubernetes_version }}-00
+          - kubectl={{ kubernetes_version }}-00
+        state: present
+        update_cache: yes
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Initialize cluster (only on master)
+      command: kubeadm init --pod-network-cidr=10.244.0.0/16
+      when: inventory_hostname in groups['k8s_masters']
+      ignore_errors: yes
+
+    - name: Copy kubeconfig to user
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        mode: '0600'
+      when: inventory_hostname in groups['k8s_masters']
+
+    - name: Install Flannel CNI
+      command: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      when: inventory_hostname in groups['k8s_masters']
+
+    - name: Generate join command for workers
+      command: kubeadm token create --print-join-command
+      register: join_command
+      when: inventory_hostname in groups['k8s_masters']
+
+    - name: Save join command to hostvar for workers
+      set_fact:
+        join_command: "{{ join_command.stdout }}"
+      when: inventory_hostname in groups['k8s_masters']
+
+    - name: Join workers
+      command: "{{ hostvars[groups['k8s_masters'][0]]['join_command'] }}"
+      when: inventory_hostname in groups['k8s_workers']
+
+  when: k8s_supported
+  rescue:
+    - debug:
+        msg: "Kubernetes installation failed. Falling back to K3s."
+    - set_fact:
+        orchestrator: "k3s"
+    - include_role:
+        name: k3s

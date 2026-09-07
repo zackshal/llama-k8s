@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama-server
+  namespace: llama
+  labels:
+    app: llama-server
+spec:
+  replicas: {{ llama_replicas | default(1) }}
+  selector:
+    matchLabels:
+      app: llama-server
+  template:
+    metadata:
+      labels:
+        app: llama-server
+    spec:
+      runtimeClassName: nvidia
+      containers:
+        - name: llama-server
+          image: llama-server-cuda:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+            - containerPort: 8082
+          env:
+            - name: MODEL_DIR
+              value: /models
+            - name: MCP_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: MCP_ENABLED
+            - name: HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: HOST
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: PORT
+            - name: MODEL_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: MODEL_NAME
+            - name: NGL
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: NGL
+            - name: CONTEXT
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: CONTEXT
+            - name: BATCH
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: BATCH
+            - name: THREADS
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: THREADS
+            - name: THREADS_BATCH
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: THREADS_BATCH
+            - name: FLASH_ATTN
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: FLASH_ATTN
+            - name: CACHE_TYPE_K
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: CACHE_TYPE_K
+            - name: CACHE_TYPE_V
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: CACHE_TYPE_V
+            - name: PARALLEL
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: PARALLEL
+            - name: CONT_BATCHING
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: CONT_BATCHING
+            - name: MLOCK
+              valueFrom:
+                configMapKeyRef:
+                  name: llama-config
+                  key: MLOCK
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              memory: {{ llama_memory_limit | default('8Gi') }}
+              cpu: {{ llama_cpu_limit | default('4') }}
+            requests:
+              nvidia.com/gpu: 1
+              memory: {{ llama_memory_limit | default('8Gi') }}
+              cpu: {{ llama_cpu_limit | default('4') }}
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: models-pvc

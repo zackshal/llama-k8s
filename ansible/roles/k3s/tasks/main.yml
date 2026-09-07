@@ -1,0 +1,99 @@
+---
+# ============================================================
+# Role: k3s
+# Description: Installs lightweight Kubernetes (K3s) on any architecture.
+#              Automatically detects architecture (amd64, arm64, armv7, etc.)
+#              and configures containerd for GPU support if NVIDIA drivers exist.
+# ============================================================
+
+- name: Check if K3s is already installed
+  stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary
+
+- name: Install K3s (if not present)
+  shell: |
+    curl -sfL https://get.k3s.io | \
+    INSTALL_K3S_VERSION={{ k3s_version | default('latest') }} \
+    INSTALL_K3S_EXEC="server --disable-agent" \
+    sh -
+  args:
+    creates: /usr/local/bin/k3s
+  when: not k3s_binary.stat.exists
+  environment:
+    # Additional flags can be passed via k3s_install_flags variable
+    INSTALL_K3S_EXEC: "{{ k3s_install_flags | default('') }}"
+
+- name: Set kubeconfig permissions (readable by all users)
+  file:
+    path: /etc/rancher/k3s/k3s.yaml
+    mode: '0644'
+
+- name: Create .kube directory for root
+  file:
+    path: /root/.kube
+    state: directory
+    mode: '0700'
+
+- name: Copy kubeconfig to root's home
+  copy:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: /root/.kube/config
+    remote_src: yes
+    mode: '0600'
+
+- name: Symlink kubectl to k3s binary
+  file:
+    src: /usr/local/bin/k3s
+    dest: /usr/local/bin/kubectl
+    state: link
+
+#  GPU Support 
+- name: Check if NVIDIA drivers are loaded
+  command: nvidia-smi
+  register: nvidia_check
+  ignore_errors: yes
+  changed_when: false
+
+- name: Configure containerd for GPU support (if NVIDIA is present)
+  block:
+    - name: Ensure containerd config directory exists
+      file:
+        path: /var/lib/rancher/k3s/agent/etc/containerd
+        state: directory
+        mode: '0755'
+
+    - name: Create containerd config.toml for GPU support
+      copy:
+        dest: /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+        content: |
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia]
+            runtime_type = "io.containerd.runc.v2"
+            [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia.options]
+              BinaryName = "/usr/bin/nvidia-container-runtime"
+        mode: '0644'
+      notify: restart k3s
+
+    - name: Set environment variable for containerd to use NVIDIA runtime
+      lineinfile:
+        path: /etc/systemd/system/k3s.service.env
+        create: yes
+        line: "K3S_CONTAINERD_CONFIG=/var/lib/rancher/k3s/agent/etc/containerd/config.toml"
+        mode: '0644'
+      notify: restart k3s
+
+  when: nvidia_check.rc == 0 and ansible_facts['architecture'] == 'x86_64'
+
+#  Handlers 
+- name: Flush handlers (restart k3s if needed)
+  meta: flush_handlers
+
+#  Final status 
+- name: Verify K3s is running
+  shell: kubectl get nodes
+  register: k3s_status
+  changed_when: false
+
+- name: Show K3s status
+  debug:
+    msg: "K3s is running: {{ k3s_status.stdout }}"

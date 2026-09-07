@@ -1,0 +1,38 @@
+# {{ ansible_managed }}
+# System-wide logrotate configuration – optimized for max compression
+
+# Rotate logs weekly by default
+weekly
+rotate 12
+
+# Create new empty log files after rotating old ones
+create
+
+# Use gzip compression (level 9 – max)
+compress
+compresscmd /usr/bin/gzip
+compressoptions -9
+uncompresscmd /usr/bin/gunzip
+
+# Don't rotate empty logs
+notifempty
+
+# Wait until the old log is compressed before rotating again (for postrotate)
+delaycompress
+
+# Include additional configurations
+include /etc/logrotate.d
+
+# System logs (already handled via separate configs)
+/var/log/wtmp {
+    monthly
+    create 0664 root utmp
+    minsize 1M
+    rotate 1
+}
+
+/var/log/btmp {
+    monthly
+    create 0660 root utmp
+    rotate 1
+}

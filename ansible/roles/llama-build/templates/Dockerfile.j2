@@ -1,0 +1,23 @@
+FROM {{ cuda_base_image }}
+
+RUN apt-get update && apt-get install -y \
+    git cmake build-essential python3 python3-pip bc \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir flask requests
+
+WORKDIR /app
+RUN git clone https://github.com/ggerganov/llama.cpp.git && \
+    cd llama.cpp && git checkout a0ed91a44
+
+WORKDIR /app/llama.cpp
+RUN mkdir build && cd build && \
+    cmake .. -DLLAMA_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_CUDA_ARCH=89 && \
+    make -j$(nproc) llama-server
+
+COPY entrypoint.sh /entrypoint.sh
+COPY mcp_adapter.py /app/mcp_adapter.py
+RUN chmod +x /entrypoint.sh /app/mcp_adapter.py
+
+EXPOSE 8081 8082
+ENTRYPOINT ["/entrypoint.sh"]

@@ -1,0 +1,42 @@
+---
+- name: Create project directory
+  file:
+    path: "{{ project_root }}"
+    state: directory
+    mode: '0755'
+
+- name: Determine CUDA base image based on architecture
+  set_fact:
+    cuda_base_image: "{{ 'nvidia/cuda:12.4.0-devel-ubuntu22.04' if ansible_facts['architecture'] == 'x86_64' else 'nvidia/cuda:12.4.0-devel-ubuntu22.04-arm64' }}"
+
+- name: Render Dockerfile from template
+  template:
+    src: Dockerfile.j2
+    dest: "{{ project_root }}/Dockerfile"
+    mode: '0644'
+
+- name: Copy entrypoint and mcp_adapter
+  copy:
+    src: "{{ item }}"
+    dest: "{{ project_root }}/{{ item | basename }}"
+    mode: '0755'
+  loop:
+    - entrypoint.sh
+    - mcp_adapter.py
+
+- name: Copy conversion script
+  copy:
+    src: "{{ playbook_dir }}/../scripts/convert_models.py"
+    dest: "{{ project_root }}/scripts/convert_models.py"
+    mode: '0755'
+  when: auto_convert | bool
+
+- name: Build Docker image with CUDA
+  docker_image:
+    name: llama-server-cuda
+    tag: latest
+    build:
+      path: "{{ project_root }}"
+      pull: yes
+    source: build
+    state: present

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llama-config
+  namespace: llama
+data:
+  MCP_ENABLED: "{{ mcp_enabled | default('true') | lower }}"
+  HOST: "0.0.0.0"
+  PORT: "8081"
+  MODEL_NAME: "{{ model_name | default('') }}"
+  NGL: ""   # empty → auto-detect in entrypoint
+  CONTEXT: ""
+  BATCH: ""
+  THREADS: ""
+  THREADS_BATCH: ""
+  FLASH_ATTN: "on"
+  CACHE_TYPE_K: "q4_0"
+  CACHE_TYPE_V: "q4_0"
+  PARALLEL: "1"
+  CONT_BATCHING: "--cont-batching"
+  MLOCK: "--mlock"

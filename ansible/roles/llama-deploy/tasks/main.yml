@@ -1,0 +1,61 @@
+---
+- name: Deploy with Docker Compose
+  block:
+    - name: Render docker-compose.yml
+      template:
+        src: docker-compose.yml.j2
+        dest: "{{ project_root }}/docker-compose.yml"
+        mode: '0644'
+
+    - name: Start containers
+      docker_compose:
+        project_src: "{{ project_root }}"
+        state: present
+        restarted: yes
+  when: orchestrator == "compose"
+
+- name: Deploy with K3s / K8s
+  block:
+    - name: Ensure kubeconfig is exported
+      set_fact:
+        kubeconfig: "{{ '/etc/rancher/k3s/k3s.yaml' if orchestrator == 'k3s' else '/etc/kubernetes/admin.conf' }}"
+
+    - name: Create k8s manifests directory
+      file:
+        path: "{{ project_root }}/k8s"
+        state: directory
+
+    # Копируем статические манифесты (без изменений)
+    - name: Copy static manifests
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ project_root }}/k8s/{{ item.dest }}"
+      loop:
+        - { src: "templates/namespace.yaml", dest: "base/namespace.yaml" }
+        - { src: "templates/runtimeclass.yaml", dest: "base/runtimeclass.yaml" }
+        - { src: "templates/pv-model.yaml", dest: "base/pv-model.yaml" }
+        - { src: "templates/pvc-model.yaml", dest: "base/pvc-model.yaml" }
+        - { src: "templates/configmap.yaml", dest: "base/configmap.yaml" }
+        - { src: "templates/service.yaml", dest: "base/service.yaml" }
+
+    # Генерируем Deployment из шаблона с подстановкой переменных
+    - name: Render deployment.yaml from template
+      template:
+        src: deployment.yaml.j2
+        dest: "{{ project_root }}/k8s/base/deployment.yaml"
+        mode: '0644'
+
+    # Копируем overlays (kustomization.yaml)
+    - name: Copy overlays
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ project_root }}/k8s/{{ item.dest }}"
+      loop:
+        - { src: "templates/kustomization-single.yaml", dest: "overlays/single-node/kustomization.yaml" }
+        - { src: "templates/kustomization-multi.yaml", dest: "overlays/multi-node/kustomization.yaml" }
+
+    - name: Apply manifests
+      shell: |
+        export KUBECONFIG={{ kubeconfig }}
+        kubectl apply -k {{ project_root }}/k8s/overlays/{{ 'single-node' if groups['all'] | length == 1 else 'multi-node' }}
+  when: orchestrator in ["k3s", "k8s"]

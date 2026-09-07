@@ -1,0 +1,30 @@
+# docker-compose.yml – run both llama-server and MCP adapter
+version: '3.8'
+
+services:
+  llama-server:
+    build: .
+    container_name: llama-server
+    runtime: nvidia          # enables GPU support
+    environment:
+      - MODEL_DIR=/models
+      # MODEL_NAME: optional, auto‑pick first .gguf if not set
+      - HOST=0.0.0.0
+      - PORT=8081
+      - MCP_ENABLED=1        # start MCP adapter inside the same container
+      # All other parameters are auto‑detected, but can be overridden:
+      # - NGL=60
+      # - CONTEXT=8192
+      # - THREADS=12
+    volumes:
+      - /home/k3rnel_co0n/llama.cpp/models:/models   # mount your models dir
+    ports:
+      - "8081:8081"          # llama-server API
+      - "8082:8082"          # MCP adapter HTTP
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

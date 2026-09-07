@@ -1,0 +1,33 @@
+---
+- name: Determine system architecture
+  set_fact:
+    arch: "{{ ansible_facts['architecture'] }}"
+
+- name: Install NVIDIA drivers and CUDA (x86_64 only)
+  block:
+    - name: Add NVIDIA repository
+      apt_repository:
+        repo: "deb https://nvidia.github.io/nvidia-docker/ubuntu22.04/amd64 /"
+        state: present
+        update_cache: yes
+
+    - name: Install NVIDIA drivers and CUDA toolkit
+      apt:
+        name:
+          - nvidia-driver-{{ nvidia_driver_version }}
+          - nvidia-utils-{{ nvidia_driver_version }}
+          - cuda-toolkit-{{ cuda_version }}
+        state: present
+      notify: reboot host
+
+    - name: Load NVIDIA kernel module
+      modprobe:
+        name: nvidia
+        state: present
+
+  when: arch == 'x86_64'
+
+- name: Skip NVIDIA installation on non-x86_64 architectures
+  debug:
+    msg: "Skipping NVIDIA driver installation on architecture {{ arch }} (only x86_64 is supported)"
+  when: arch != 'x86_64'

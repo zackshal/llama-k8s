@@ -1,0 +1,63 @@
+---
+- name: Install prerequisites
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - software-properties-common
+    state: present
+
+- name: Add Docker GPG key
+  apt_key:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    state: present
+
+- name: Add Docker repository (architecture-aware)
+  apt_repository:
+    repo: "deb [arch={{ ansible_facts['architecture'] | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }}] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    state: present
+
+- name: Install Docker
+  apt:
+    name: "docker-ce={{ docker_version }}"
+    state: present
+    update_cache: yes
+  notify: start docker
+
+- name: Install NVIDIA Container Toolkit (only if NVIDIA driver is present)
+  block:
+    - name: Check if NVIDIA driver is loaded
+      command: nvidia-smi
+      register: nvidia_check
+      ignore_errors: yes
+
+    - name: Install NVIDIA Container Toolkit
+      apt:
+        name: nvidia-container-toolkit
+        state: present
+      when: nvidia_check.rc == 0
+
+    - name: Configure Docker daemon for NVIDIA runtime
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+              "runtimes": {
+                  "nvidia": {
+                      "path": "nvidia-container-runtime",
+                      "runtimeArgs": []
+                  }
+              },
+              "default-runtime": "nvidia"
+          }
+      when: nvidia_check.rc == 0
+      notify: restart docker
+
+  when: ansible_facts['architecture'] == 'x86_64'
+
+- name: Start and enable Docker
+  systemd:
+    name: docker
+    state: started
+    enabled: yes

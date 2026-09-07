@@ -1,0 +1,114 @@
+---
+- name: Ensure logrotate is installed
+  apt:
+    name: logrotate
+    state: present
+
+- name: Create custom logrotate configuration for all logs
+  template:
+    src: logrotate.conf.j2
+    dest: /etc/logrotate.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart logrotate
+
+- name: Create additional config for Docker containers logs
+  copy:
+    dest: /etc/logrotate.d/docker-containers
+    content: |
+      /var/lib/docker/containers/*/*.log {
+          daily
+          missingok
+          rotate 7
+          compress
+          delaycompress
+          notifempty
+          create 0644 root root
+          maxsize 100M
+          minsize 10M
+          dateext
+          dateformat -%Y%m%d
+          extension .log
+          compresscmd /usr/bin/gzip
+          compressoptions -9
+          uncompresscmd /usr/bin/gunzip
+          sharedscripts
+          postrotate
+              /usr/bin/docker system prune -f --volumes --filter "until=24h" 2>/dev/null || true
+          endscript
+      }
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart logrotate
+
+- name: Configure logrotate for application logs (/var/log/llama/*.log)
+  copy:
+    dest: /etc/logrotate.d/llama-app
+    content: |
+      /var/log/llama/*.log {
+          daily
+          rotate 30
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 0644 root root
+          maxsize 200M
+          minsize 10M
+          dateext
+          dateformat -%Y%m%d
+          compresscmd /usr/bin/gzip
+          compressoptions -9
+          extension .log
+      }
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart logrotate
+
+- name: Configure logrotate for syslog and auth logs (with xz for max compression)
+  copy:
+    dest: /etc/logrotate.d/syslog
+    content: |
+      /var/log/syslog
+      /var/log/auth.log
+      {
+          daily
+          rotate 14
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 0640 syslog adm
+          postrotate
+              /usr/lib/rsyslog/rsyslog-rotate
+          endscript
+          compresscmd /usr/bin/xz
+          compressoptions -9e
+          uncompresscmd /usr/bin/unxz
+          extension .xz
+          maxsize 500M
+      }
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart logrotate
+
+- name: Ensure log directory exists
+  file:
+    path: /var/log/llama
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Enable cron job for logrotate (daily)
+  cron:
+    name: "logrotate daily"
+    minute: "0"
+    hour: "2"
+    job: "/usr/sbin/logrotate /etc/logrotate.conf"
+    user: root
+    state: present

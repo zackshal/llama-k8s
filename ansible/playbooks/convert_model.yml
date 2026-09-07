@@ -1,0 +1,9 @@
+- name: Run conversion using universal wrapper
+  command: >
+    python3 {{ project_root }}/scripts/convert_models.py
+    --model-path "{{ model_file }}"
+    --outfile "{{ model_file | replace('.safetensors', '.gguf') | replace('.bin', '.gguf') | replace('.pt', '.gguf') | replace('.pth', '.gguf') | replace('.onnx', '.gguf') }}"
+  args:
+    creates: "{{ model_file | replace('.safetensors', '.gguf') | replace('.bin', '.gguf') | replace('.pt', '.gguf') | replace('.pth', '.gguf') | replace('.onnx', '.gguf') }}"
+  register: conversion_result
+  when: model_file.endswith('.safetensors') or model_file.endswith('.bin') or model_file.endswith('.pt') or model_file.endswith('.pth') or model_file.endswith('.onnx')

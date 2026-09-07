@@ -1,0 +1,51 @@
+name: Deploy LLM Farm
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      orchestrator:
+        description: 'Orchestrator (compose, k3s, k8s)'
+        default: 'k3s'
+        required: true
+      models_list:
+        description: 'Comma-separated list of models (e.g. model1.gguf,model2.safetensors)'
+        default: ''
+        required: false
+      auto_convert:
+        description: 'Auto-convert non-GGUF models'
+        default: 'true'
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: |
+          sudo apt update
+          sudo apt install -y ansible sshpass
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.VPS_IP }} >> ~/.ssh/known_hosts
+
+      - name: Run Ansible playbook
+        env:
+          ORCHESTRATOR: ${{ github.event.inputs.orchestrator || 'k3s' }}
+          MODELS_LIST: ${{ github.event.inputs.models_list || '' }}
+          AUTO_CONVERT: ${{ github.event.inputs.auto_convert || 'true' }}
+        run: |
+          cd ansible
+          ansible-playbook playbooks/site.yml \
+            -i inventory/production/hosts.ini \
+            --extra-vars "orchestrator=$ORCHESTRATOR models_list=$MODELS_LIST auto_convert=$AUTO_CONVERT" \
+            -v

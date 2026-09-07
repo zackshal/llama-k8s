@@ -1,0 +1,24 @@
+version: '3.8'
+services:
+  llama-server:
+    image: llama-server-cuda:latest
+    container_name: llama-server
+    runtime: nvidia
+    environment:
+      - MODEL_DIR=/models
+      - MCP_ENABLED={{ mcp_enabled | default('0') }}
+      - HOST=0.0.0.0
+      - PORT=8081
+    volumes:
+      - {{ models_host_path }}:/models
+    ports:
+      - "8081:8081"
+      - "8082:8082"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped

@@ -1,0 +1,179 @@
+---
+# MAIN PLAYBOOK – Fully automated llama.cpp deployment
+# Features:
+#    Autodetects system resources (RAM, CPU, GPU)
+#    Computes optimal K8s limits (80% of total)
+#    Autoselects orchestrator: K8s if >1 node & supported arch, else K3s
+#    Sets replicas = number of GPUs (if any)
+#    All variables can be overridden via environment variables
+
+- name: Full automation for llama.cpp deployment
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars:
+    # Allow override from environment or default to 'auto'
+    orchestrator: "{{ lookup('env', 'ORCHESTRATOR') | default('auto', true) }}"
+    auto_convert: "{{ lookup('env', 'AUTO_CONVERT') | default('true', true) | bool }}"
+    model_name: "{{ lookup('env', 'MODEL_NAME') | default('', true) }}"
+    models_list: "{{ lookup('env', 'MODELS_LIST') | default('', true) }}"
+    mcp_enabled: "{{ lookup('env', 'MCP_ENABLED') | default('true', true) | bool }}"
+    verbose_logging: "{{ lookup('env', 'VERBOSE_LOGGING') | default('true', true) | bool }}"
+
+  pre_tasks:
+    #  Basic preparation 
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Ensure model directory exists
+      file:
+        path: "{{ models_host_path }}"
+        state: directory
+        mode: '0755'
+
+    #  Dynamic resource calculation 
+    - name: Determine total system RAM (MiB)
+      set_fact:
+        total_ram_mb: "{{ ansible_memtotal_mb }}"
+
+    - name: Determine number of CPU cores
+      set_fact:
+        total_cpu_cores: "{{ ansible_processor_cores }}"
+
+    - name: Calculate recommended memory limit (80% of total RAM)
+      set_fact:
+        recommended_memory_gi: "{{ (total_ram_mb * 0.8 / 1024) | round(0) | int }}Gi"
+        recommended_cpu: "{{ [ (total_cpu_cores * 0.8) | round(0) | int, 1 ] | max }}"
+
+    #  GPU detection 
+    - name: Check for NVIDIA GPU
+      command: nvidia-smi --query-gpu=count --format=csv,noheader
+      register: gpu_count_raw
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Set GPU count if available
+      set_fact:
+        gpu_count: "{{ gpu_count_raw.stdout | int }}"
+      when: gpu_count_raw.rc == 0
+
+    - name: Set GPU count to 0 if not detected
+      set_fact:
+        gpu_count: 0
+      when: gpu_count_raw.rc != 0
+
+    #  Orchestrator autoselection 
+    - name: Determine number of nodes in inventory
+      set_fact:
+        node_count: "{{ groups['all'] | length }}"
+
+    - name: Auto-select orchestrator
+      set_fact:
+        orchestrator: >-
+          {{
+            'k8s'
+            if (node_count > 1 and ansible_architecture in ['x86_64', 'aarch64', 'arm64'])
+            else 'k3s'
+          }}
+      when: orchestrator == 'auto'
+
+    #  Set final resource variables for Kubernetes 
+    - name: Override resource limits with computed values
+      set_fact:
+        llama_memory_limit: "{{ lookup('env', 'LLAMA_MEMORY_LIMIT') | default(recommended_memory_gi, true) }}"
+        llama_cpu_limit: "{{ lookup('env', 'LLAMA_CPU_LIMIT') | default(recommended_cpu, true) }}"
+        llama_replicas: "{{ lookup('env', 'LLAMA_REPLICAS') | default(gpu_count if gpu_count > 0 else 1, true) | int }}"
+
+    #  Display computed values 
+    - debug:
+        msg: |
+          System resources:
+            RAM: {{ total_ram_mb }} MiB → memory limit: {{ llama_memory_limit }}
+            CPU cores: {{ total_cpu_cores }} → CPU limit: {{ llama_cpu_limit }}
+            GPU count: {{ gpu_count }}
+          Orchestrator: {{ orchestrator }}
+          Replicas: {{ llama_replicas }}
+
+    #  Model Discovery (unchanged) 
+    - name: Find all model files
+      find:
+        paths: "{{ models_host_path }}"
+        patterns: "*.gguf,*.safetensors,*.bin,*.onnx,*.pt,*.pth"
+        file_type: file
+      register: found_models
+      when: not model_name and not models_list
+
+    - name: Compile list of model files
+      set_fact:
+        all_models: "{{ found_models.files | map(attribute='path') | list }}"
+      when: not model_name and not models_list
+
+    - name: If models_list is provided, split into list
+      set_fact:
+        all_models: "{{ models_list.split(',') | map('trim') | map('regex_replace', '^', models_host_path + '/') | list }}"
+      when: models_list | length > 0
+
+    - name: If only model_name is given, use it
+      set_fact:
+        all_models: ["{{ models_host_path }}/{{ model_name }}"]
+      when: model_name | length > 0
+
+    - name: Abort if no models found
+      fail:
+        msg: "No models found in {{ models_host_path }} and no model_name or models_list provided."
+      when: all_models | length == 0
+
+    - name: Convert non-GGUF models to GGUF (if auto_convert is true)
+      include_tasks: convert_model.yml
+      loop: "{{ all_models }}"
+      loop_control:
+        loop_var: model_file
+      when: auto_convert and not model_file.endswith('.gguf')
+
+    - name: Filter only GGUF models for deployment
+      set_fact:
+        gguf_models: "{{ all_models | select('match', '.*\\.gguf$') | list }}"
+      when: auto_convert
+
+    - name: Use original models if auto_convert is false
+      set_fact:
+        gguf_models: "{{ all_models }}"
+      when: not auto_convert
+
+    - name: Display models to be deployed
+      debug:
+        msg: "Deploying models: {{ gguf_models }}"
+
+  roles:
+    - role: common
+    - role: nvidia
+      when: ansible_facts['os_family'] == "Debian" and ('gpu_nodes' in group_names or 'nvidia_hosts' in group_names)
+    - role: docker
+    - role: logrotate
+    - role: journald
+    - role: "{{ orchestrator }}"
+      when: orchestrator in ['k3s', 'k8s']
+    - role: llama-build
+    - role: llama-deploy
+
+  post_tasks:
+    - name: Show deployment info
+      debug:
+        msg: |
+          ✅ Deployment complete!
+          🦙 Models deployed: {{ gguf_models | join(', ') }}
+          📊 Orchestrator: {{ orchestrator }}
+          🔌 MCP adapter: {{ 'enabled' if mcp_enabled else 'disabled' }}
+          🗜️ Log compression: enabled
+          💾 Memory limit: {{ llama_memory_limit }}
+          🧠 CPU limit: {{ llama_cpu_limit }}
+          🔁 Replicas: {{ llama_replicas }}
+
+    - name: Display access endpoints
+      debug:
+        msg: "API endpoint for model index {{ index }}: http://{{ ansible_default_ipv4.address }}:{{ 8081 + index }}"
+      loop: "{{ gguf_models }}"
+      loop_control:
+        index_var: index

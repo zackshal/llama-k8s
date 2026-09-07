@@ -1,0 +1,42 @@
+---
+- name: Install basic system packages
+  apt:
+    name:
+      - wget
+      - curl
+      - git
+      - vim
+      - htop
+      - net-tools
+      - bc
+      - python3-pip
+      - software-properties-common
+      - gnupg
+      - ca-certificates
+    state: present
+    update_cache: yes
+
+- name: Set timezone to UTC
+  timezone:
+    name: UTC
+
+- name: Disable swap (required for Kubernetes)
+  command: swapoff -a
+  when: orchestrator in ['k3s', 'k8s']
+  ignore_errors: yes
+
+- name: Remove swap from fstab
+  mount:
+    name: swap
+    fstype: swap
+    state: absent
+  when: orchestrator in ['k3s', 'k8s']
+
+- name: Install Python dependencies for conversion
+  pip:
+    name:
+      - torch
+      - transformers
+      - sentencepiece
+      - protobuf
+    state: present

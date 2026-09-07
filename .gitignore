@@ -1,0 +1,28 @@
+# Ansible
+ansible/facts_cache/
+ansible/ansible.log
+*.retry
+*.pyc
+__pycache__/
+
+# Vault secrets (если используете)
+ansible/vault/*.yml
+
+# Docker / local files
+*.env
+*.pem
+*.key
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+tmp/
