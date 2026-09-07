@@ -5,6 +5,12 @@ ansible/ansible.log
 *.pyc
 __pycache__/
 
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
 # Vault secrets (если используете)
 ansible/vault/*.yml
 
@@ -15,14 +21,29 @@ ansible/vault/*.yml
 
 # Logs
 *.log
+logs/
+tmp/
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
 
 # Temporary
-tmp/
+.dockerignore
+*.tmp
+*.temp
+
+# Generated files
+README_generated.md
+README_generated.json
+README_clean.md
+
+# zip
+llama-k8s.zip
