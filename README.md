@@ -1,141 +1,92 @@
 # 🦙 llama-k8s
 
-> Автоматизированное развёртывание и запуск `llama.cpp` на Linux/GPU-инфраструктуре с адаптацией параметров под доступные CPU, RAM и VRAM.
+> Автоматизированный deployment pipeline для локального LLM inference на Linux/GPU-инфраструктуре с `llama.cpp`, NVIDIA/CUDA, Ansible, Docker Compose, K3s и Kubernetes.
 
-![Platform](https://img.shields.io/badge/platform-Linux-0f172a?logo=linux&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-24.x-2496ED?logo=docker&logoColor=white)
-![CUDA](https://img.shields.io/badge/CUDA-12.4-76B900?logo=nvidia&logoColor=white)
-![Ansible](https://img.shields.io/badge/Ansible-automation-E00?logo=ansible&logoColor=white)
-![Kubernetes](https://img.shields.io/badge/Kubernetes-1.28-326CE5?logo=kubernetes&logoColor=white)
-![K3s](https://img.shields.io/badge/K3s-1.28-FFC61C?logo=k3s&logoColor=black)
-![llama.cpp](https://img.shields.io/badge/llama.cpp-pinned%20commit-black)
-![Branch](https://img.shields.io/badge/default%20development%20branch-dev-informational)
-
-## Содержание
-
-- [О проекте](#-о-проекте)
-- [Цель](#-цель)
-- [Что умеет проект](#-что-умеет-проект)
-- [Архитектура](#-архитектура)
-- [Стек технологий](#-стек-технологий)
-- [Структура репозитория](#-структура-репозитория)
-- [Быстрый запуск](#-быстрый-запуск)
-- [Развёртывание через Ansible](#-развёртывание-через-ansible)
-- [Конфигурация](#-конфигурация)
-- [Автоматическая оптимизация](#-автоматическая-оптимизация)
-- [MCP-адаптер](#-mcp-адаптер)
-- [Работа с Kubernetes](#-работа-с-kubernetes)
-- [CI/CD](#-cicd)
-- [Тестирование и проверка](#-тестирование-и-проверка)
-- [Git и ветки](#-git-и-ветки)
-- [Известные ограничения](#-известные-ограничения)
-- [Roadmap](#-roadmap)
-- [Лицензия](#-лицензия)
+[![Branch](https://img.shields.io/badge/branch-dev-blue)](https://github.com/zackshal/llama-k8s/tree/dev)
+[![Release](https://img.shields.io/badge/release-v0.0.1-orange)](https://github.com/zackshal/llama-k8s/releases/tag/v0.0.1)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![CUDA](https://img.shields.io/badge/CUDA-12.4-76B900)](https://developer.nvidia.com/cuda-toolkit)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-1.28-326CE5)](https://kubernetes.io/)
 
 ---
 
-## 🧩 О проекте
+## 📌 О проекте
 
-`llama-k8s` — инфраструктурный проект для автоматизации жизненного цикла локального LLM-сервера на базе [`llama.cpp`](https://github.com/ggml-org/llama.cpp).
+`llama-k8s` — инфраструктурный проект для автоматизации развёртывания и запуска локальных LLM на Linux-хостах с NVIDIA GPU.
 
-Проект объединяет:
+Проект связывает в единый pipeline обнаружение hardware, подготовку хоста, сборку CUDA-образа с `llama.cpp`, поиск/конвертацию моделей, runtime auto-tuning и deployment через Docker Compose, K3s или Kubernetes.
 
-- сборку `llama.cpp` с поддержкой CUDA;
-- запуск `llama-server` в контейнере;
-- автоматическое определение ресурсов хоста;
-- вычисление параметров CPU/GPU и контекстного окна;
-- автоматизированную подготовку инфраструктуры через Ansible;
-- варианты развёртывания через Docker Compose, K3s или Kubernetes;
-- Kubernetes manifests с Kustomize overlays;
-- опциональный HTTP-адаптер для MCP-подобного интерфейса;
-- настройку журналирования и ротации логов;
-- GitHub Actions для запуска Ansible-деплоя.
+Ключевой принцип:
 
-Главная идея проекта — **не задавать все параметры LLM-инференса вручную для каждой машины**, а вычислять базовые значения исходя из фактического железа и доступной памяти.
+> **Infrastructure first, model second.**
+
+Модель не должна требовать ручного подбора всех inference-параметров под каждую машину. Runtime определяет доступные CPU, RAM, GPU/VRAM и характеристики модели, после чего выбирает разумную стартовую конфигурацию.
 
 ---
 
 ## 🎯 Цель
 
-Цель проекта — получить воспроизводимый pipeline:
+Получить воспроизводимый deployment pipeline:
 
 ```text
 Linux host
-   │
-   ├── CPU / RAM / GPU discovery
-   │
-   ├── Infrastructure provisioning (Ansible)
-   │
-   ├── Docker + NVIDIA runtime
-   │
-   ├── llama.cpp build
-   │
-   ├── model discovery / optional conversion
-   │
-   ├── automatic runtime tuning
-   │
-   └── deployment
-        ├── Docker Compose
-        ├── K3s
-        └── Kubernetes
+    │
+    ├── CPU / RAM / GPU discovery
+    ├── Ansible provisioning
+    ├── Docker + NVIDIA runtime
+    ├── llama.cpp CUDA build
+    ├── Model discovery
+    │       └── optional conversion → GGUF
+    ├── Runtime auto-tuning
+    │       ├── threads
+    │       ├── context
+    │       ├── batch
+    │       └── GPU offload
+    └── Deployment
+            ├── Docker Compose
+            ├── K3s
+            └── Kubernetes
 ```
 
-Таким образом, один и тот же репозиторий описывает и инфраструктуру, и контейнер, и параметры запуска модели, и процесс доставки изменений.
+Таким образом, один репозиторий описывает инфраструктуру, контейнер, параметры запуска модели и доставку изменений.
 
 ---
 
-## ✨ Что умеет проект
+## ✨ Возможности
 
-### Автоматизация инфраструктуры
+### ⚙️ Infrastructure provisioning
 
-Ansible playbook выполняет базовую подготовку хоста, устанавливает Docker, при необходимости настраивает NVIDIA Container Toolkit, настраивает логирование и выбирает оркестратор.
+Ansible выполняет:
 
-### GPU-aware deployment
+- сбор facts;
+- определение CPU/RAM;
+- обнаружение NVIDIA GPU;
+- установку Docker;
+- настройку NVIDIA runtime;
+- установку K3s или Kubernetes;
+- настройку journald и logrotate;
+- сборку inference image;
+- deployment.
 
-Для NVIDIA-хостов учитываются:
+### 🧠 GPU-aware inference
 
-- количество GPU;
-- общий и свободный объём VRAM;
-- возможность offload слоёв модели;
-- число реплик в Kubernetes-сценарии.
+Учитываются количество GPU, общий/свободный объём VRAM, доступная RAM, CPU topology, L3 cache и размер/metadata модели.
 
-### Автоматическая настройка `llama-server`
+### 🔬 Runtime auto-tuning
 
-`entrypoint.sh` вычисляет параметры запуска на основании:
+`entrypoint.sh` рассчитывает:
 
-- физических и логических CPU;
-- L3 cache;
-- общего и доступного RAM;
-- общего и свободного VRAM;
-- размера и метаданных модели.
-
-В частности, автоматически рассчитываются:
-
-- `-ngl`;
+- `NGL` / GPU offload;
 - context size;
 - batch size;
 - `threads`;
 - `threads-batch`.
 
-При этом значения можно переопределить через переменные окружения.
+Параметры можно переопределять через environment variables.
 
-### Несколько способов деплоя
+### 📦 Model discovery & conversion
 
-Проект содержит логику для:
-
-```text
-Compose
-K3s
-Kubernetes
-```
-
-Оркестратор можно выбирать автоматически или задавать явно.
-
-### Работа с моделями
-
-Ansible умеет находить модели в `models_host_path` и предусматривает автоматическую конвертацию не-GGUF моделей в GGUF.
-
-Поддерживаемые расширения, которые рассматриваются playbook'ом для обнаружения:
+Playbook ищет модели в `models_host_path` и предусматривает conversion pipeline в GGUF. Распознаются:
 
 ```text
 .gguf
@@ -146,11 +97,36 @@ Ansible умеет находить модели в `models_host_path` и пре
 .pth
 ```
 
+### ☸️ Kubernetes
+
+Поддерживаются single-node и multi-node сценарии, Kustomize overlays, NVIDIA RuntimeClass, GPU resource requests, PVC для моделей и стандартный набор Kubernetes resources.
+
+### 🔌 HTTP / MCP-style adapter
+
+`mcp_adapter.py` предоставляет Flask HTTP-слой перед `llama-server`:
+
+```text
+client
+  │
+  ▼
+:8082 /complete
+  │
+  ▼
+:8081 /completion
+  │
+  ▼
+llama.cpp
+```
+
+### 🔄 CI/CD
+
+`.github/workflows/deploy.yml` запускает deployment после `push` в `main` и поддерживает ручной `workflow_dispatch` с выбором orchestrator, моделей и conversion.
+
 ---
 
-## 🏗 Архитектура
+# 🏗 Архитектура
 
-### Общая схема
+## Общая схема
 
 ```mermaid
 flowchart TD
@@ -179,36 +155,31 @@ flowchart TD
     Q --> R[Optional conversion to GGUF]
     R --> M
 
-    S[CPU / RAM / VRAM] --> T[Auto tuning]
+    S[CPU / RAM / VRAM] --> T[Auto-tuning]
     T --> M
 ```
 
-### Runtime контейнера
+## Runtime контейнера
 
 ```mermaid
 flowchart LR
     A[Host resources] --> B[entrypoint.sh]
-
     B --> C[CPU detection]
     B --> D[RAM detection]
     B --> E[GPU detection]
     B --> F[Model detection]
-
     C --> G[Thread tuning]
     D --> H[CPU context fallback]
     E --> I[GPU offload]
     F --> J[Model metadata]
-
     G --> K[llama-server command]
     H --> K
     I --> K
     J --> K
-
     K --> L[:8081 llama-server]
-    K --> M[:8082 MCP adapter]
 ```
 
-### Kubernetes-слой
+## Kubernetes layer
 
 ```mermaid
 flowchart TD
@@ -219,10 +190,8 @@ flowchart TD
     B --> F[ConfigMap]
     B --> G[Service]
     B --> H[Deployment]
-
-    I[kustomization-single.yaml] --> B
-    J[kustomization-multi.yaml] --> B
-
+    I[single-node overlay] --> B
+    J[multi-node overlay] --> B
     H --> K[NVIDIA GPU]
     H --> L[Model PVC]
     H --> M[llama-server]
@@ -230,30 +199,30 @@ flowchart TD
 
 ---
 
-## 🛠 Стек технологий
+# 🧩 Технологический стек
 
 | Технология | Назначение |
 |---|---|
-| **Bash** | Entrypoint и автоматическая настройка параметров запуска |
-| **Python 3** | MCP HTTP adapter и вспомогательная логика конвертации |
-| **llama.cpp** | LLM inference engine |
+| **Bash** | runtime detection и запуск контейнера |
+| **Python 3** | HTTP adapter и model conversion helpers |
+| **llama.cpp** | inference engine |
 | **CUDA 12.4** | GPU acceleration |
-| **Docker** | Сборка и запуск контейнера |
-| **NVIDIA Container Toolkit** | Передача GPU в контейнер |
-| **Ansible** | Provisioning и deployment |
-| **K3s** | Lightweight Kubernetes deployment |
-| **Kubernetes 1.28** | Multi-node orchestration |
-| **Kustomize** | Kubernetes overlays |
-| **Flask** | HTTP API MCP adapter |
-| **requests** | HTTP forwarding в `llama-server` |
-| **GitHub Actions** | CI/CD deployment workflow |
+| **Docker** | сборка и запуск inference image |
+| **NVIDIA Container Toolkit** | передача GPU в контейнер |
+| **Ansible** | provisioning и deployment |
+| **K3s** | lightweight Kubernetes deployment |
+| **Kubernetes 1.28** | orchestration |
+| **Kustomize** | overlays |
+| **Flask** | HTTP adapter |
+| **requests** | forwarding в `llama-server` |
+| **GitHub Actions** | CI/CD |
 
-Версии, зафиксированные в конфигурации проекта:
+### Зафиксированные версии
 
 | Компонент | Версия / значение |
 |---|---|
 | CUDA base image | `12.4.0` |
-| NVIDIA driver | `550` |
+| NVIDIA driver target | `550` |
 | CUDA toolkit | `12.4` |
 | K3s | `v1.28.8+k3s1` |
 | Kubernetes packages | `1.28.8` |
@@ -262,7 +231,7 @@ flowchart TD
 
 ---
 
-## 📁 Структура репозитория
+# 📁 Структура репозитория
 
 ```text
 llama-k8s/
@@ -272,20 +241,16 @@ llama-k8s/
 │
 ├── ansible/
 │   ├── ansible.cfg
-│   │
 │   ├── inventory/
 │   │   └── production/
 │   │       ├── hosts.ini
 │   │       └── group_vars/
 │   │           └── all.yml
-│   │
 │   ├── playbooks/
 │   │   ├── site.yml
 │   │   └── convert_model.yml
-│   │
 │   ├── scripts/
 │   │   └── convert_model.py
-│   │
 │   └── roles/
 │       ├── common/
 │       ├── docker/
@@ -305,95 +270,85 @@ llama-k8s/
 └── README.md
 ```
 
-### Ответственность директорий
-
-| Каталог / файл | Назначение |
+| Компонент | Ответственность |
 |---|---|
-| `Dockerfile` | Локальная сборка CUDA-образа `llama-server` |
-| `entrypoint.sh` | Runtime autodetection и запуск `llama-server` |
-| `mcp_adapter.py` | HTTP adapter для MCP-style completion API |
-| `docker-compose.yml` | Локальный Compose deployment |
-| `ansible/playbooks/site.yml` | Главный pipeline развёртывания |
-| `ansible/roles/common` | Базовая настройка Linux |
-| `ansible/roles/docker` | Docker и NVIDIA runtime |
-| `ansible/roles/nvidia` | NVIDIA driver / CUDA |
-| `ansible/roles/k3s` | Установка K3s |
-| `ansible/roles/k8s` | Установка Kubernetes |
-| `ansible/roles/llama-build` | Сборка образа `llama-server-cuda` |
-| `ansible/roles/llama-deploy` | Compose/Kubernetes deployment |
-| `ansible/roles/logrotate` | Ротация логов |
-| `ansible/roles/journald` | Persistent journald и vacuum |
-| `.github/workflows/deploy.yml` | GitHub Actions deployment |
+| `Dockerfile` | CUDA image и сборка `llama-server` |
+| `entrypoint.sh` | resource discovery и auto-tuning |
+| `mcp_adapter.py` | HTTP adapter |
+| `docker-compose.yml` | локальный Compose deployment |
+| `ansible/playbooks/site.yml` | основной deployment pipeline |
+| `ansible/playbooks/convert_model.yml` | model conversion workflow |
+| `ansible/scripts/convert_model.py` | conversion helper |
+| `roles/common` | базовая настройка Linux |
+| `roles/docker` | Docker / runtime |
+| `roles/nvidia` | NVIDIA configuration |
+| `roles/k3s` | K3s |
+| `roles/k8s` | Kubernetes |
+| `roles/llama-build` | build inference image |
+| `roles/llama-deploy` | Compose / Kubernetes deployment |
+| `roles/logrotate` | log rotation |
+| `roles/journald` | persistent journald / vacuum |
 
 ---
 
-## 🚀 Быстрый запуск
+# 🚀 Быстрый запуск
 
-### Предварительные требования
+## Требования
 
-Для Compose-сценария требуется Linux-хост с NVIDIA GPU и настроенным NVIDIA runtime.
-
-Проверка GPU:
+Для Compose нужен Linux-хост с NVIDIA GPU и рабочим NVIDIA runtime.
 
 ```bash
 nvidia-smi
-```
-
-Проверка Docker:
-
-```bash
 docker --version
 docker compose version
 ```
 
-### 1. Подготовьте модель
+Для Kubernetes:
 
-По умолчанию контейнер ищет первый файл:
-
-```text
-*.gguf
+```bash
+kubectl version --client
 ```
 
-в `/models`.
+## 1. Подготовьте модель
 
-### 2. Соберите образ
+Контейнер по умолчанию ищет первый `*.gguf` в `/models`. В Compose сопоставьте этот каталог с host directory с моделями.
+
+## 2. Соберите image
 
 ```bash
 docker build -t llama-server-cuda:latest .
 ```
 
-### 3. Запустите Compose
-
-Перед запуском при необходимости измените путь к каталогу моделей в `docker-compose.yml`.
+## 3. Запустите Compose
 
 ```bash
 docker compose up -d --build
-```
-
-Проверка:
-
-```bash
 docker compose ps
 docker compose logs -f llama-server
 ```
 
-### 4. API
+## 4. Проверьте GPU
 
-`llama-server` публикуется на:
-
-```text
-http://localhost:8081
+```bash
+docker exec -it llama-server nvidia-smi
 ```
 
-MCP adapter:
+## 5. Проверьте API
 
-```text
-http://localhost:8082
+```bash
+curl http://localhost:8081
+curl http://localhost:8082/health
+```
+
+Для adapter ожидается:
+
+```json
+{"status":"ok"}
 ```
 
 ---
 
-## ⚙️ Развёртывание через Ansible
+# ⚙️ Развёртывание через Ansible
 
 Основной playbook:
 
@@ -401,21 +356,27 @@ http://localhost:8082
 ansible/playbooks/site.yml
 ```
 
-Он:
+Pipeline:
 
-1. собирает facts;
-2. определяет CPU/RAM;
-3. проверяет наличие NVIDIA GPU;
-4. выбирает orchestrator;
-5. ищет модели;
-6. при необходимости запускает conversion pipeline;
-7. устанавливает инфраструктурные роли;
-8. собирает образ `llama-server-cuda`;
-9. выполняет deployment.
+```text
+facts
+  ↓
+CPU / RAM / GPU discovery
+  ↓
+orchestrator selection
+  ↓
+model discovery
+  ↓
+optional conversion
+  ↓
+infrastructure roles
+  ↓
+llama image build
+  ↓
+deployment
+```
 
-### Inventory
-
-Файл:
+## Inventory
 
 ```text
 ansible/inventory/production/hosts.ini
@@ -432,79 +393,58 @@ ansible/inventory/production/hosts.ini
 [llama]
 ```
 
-IP-адреса `node1` и `node2` читаются из переменных окружения:
+IP-адреса `node1` и `node2` задаются через environment variables:
 
 ```bash
 export NODE1_IP=192.168.1.10
 export NODE2_IP=192.168.1.11
 ```
 
-### Запуск
+## Автоматический выбор orchestrator
 
 ```bash
 cd ansible
-
 ansible-playbook \
   -i inventory/production/hosts.ini \
   playbooks/site.yml \
   -e "orchestrator=auto"
 ```
 
-### Явный выбор orchestrator
-
-Compose:
+Явный выбор:
 
 ```bash
-ansible-playbook \
-  -i inventory/production/hosts.ini \
-  playbooks/site.yml \
-  -e "orchestrator=compose"
-```
+# Compose
+ansible-playbook -i inventory/production/hosts.ini playbooks/site.yml -e "orchestrator=compose"
 
-K3s:
+# K3s
+ansible-playbook -i inventory/production/hosts.ini playbooks/site.yml -e "orchestrator=k3s"
 
-```bash
-ansible-playbook \
-  -i inventory/production/hosts.ini \
-  playbooks/site.yml \
-  -e "orchestrator=k3s"
-```
-
-Kubernetes:
-
-```bash
-ansible-playbook \
-  -i inventory/production/hosts.ini \
-  playbooks/site.yml \
-  -e "orchestrator=k8s"
+# Kubernetes
+ansible-playbook -i inventory/production/hosts.ini playbooks/site.yml -e "orchestrator=k8s"
 ```
 
 ---
 
-## 🧠 Конфигурация
+# 🔧 Конфигурация
 
-Глобальные настройки находятся в:
+Основные настройки:
 
 ```text
 ansible/inventory/production/group_vars/all.yml
 ```
 
-Основные переменные:
-
-| Переменная | Значение по умолчанию | Назначение |
-|---|---|---|
-| `project_root` | `/opt/llama-cpp` | Рабочий каталог на хосте |
-| `models_host_path` | `/mnt/models` | Каталог моделей |
-| `auto_convert` | `true` | Конвертация моделей в GGUF |
-| `mcp_enabled` | `true` | Запуск MCP adapter |
-| `verbose_logging` | `true` | Подробное логирование |
-| `llama_replicas` | `1` | Количество реплик |
-| `llama_memory_limit` | `8Gi` | Memory limit |
+| Переменная | Default | Назначение |
+|---|---:|---|
+| `project_root` | `/opt/llama-cpp` | рабочий каталог |
+| `models_host_path` | `/mnt/models` | каталог моделей |
+| `auto_convert` | `true` | конвертация моделей |
+| `mcp_enabled` | `true` | запуск adapter |
+| `verbose_logging` | `true` | подробные логи |
+| `llama_replicas` | `1` | количество replicas |
+| `llama_memory_limit` | `8Gi` | memory limit |
 | `llama_cpu_limit` | `4` | CPU limit |
 
-Переменные можно переопределять через environment variables.
-
-Примеры:
+Пример:
 
 ```bash
 export ORCHESTRATOR=k3s
@@ -518,13 +458,13 @@ export LLAMA_REPLICAS=2
 
 ---
 
-## 🔬 Автоматическая оптимизация
+# 🔬 Автоматическая оптимизация
 
-Одной из центральных частей проекта является `entrypoint.sh`.
+`entrypoint.sh` — центральный runtime-компонент.
 
 ### CPU
 
-Скрипт определяет:
+Определяются:
 
 ```text
 physical cores
@@ -532,14 +472,12 @@ logical cores
 L3 cache
 ```
 
-На их основе вычисляются:
+На их основе выбираются:
 
 ```text
 THREADS
 THREADS_BATCH
 ```
-
-При большем L3 cache используется более агрессивная рекомендация количества worker threads.
 
 ### GPU
 
@@ -551,47 +489,35 @@ GPU_USED
 GPU_FREE
 ```
 
-Затем из доступной VRAM вычитается safety margin:
+Из свободной VRAM вычитается safety margin:
 
 ```text
-VRAM_SAFETY=200 MiB
+VRAM_SAFETY = 200 MiB
 ```
 
-После этого рассчитывается примерное количество слоёв для offload:
+После этого оценивается `NGL`. При достаточной VRAM используется:
 
 ```text
-NGL
+NGL = 99
 ```
 
-При достаточном объёме VRAM используется:
+### Context
+
+Диапазоны:
 
 ```text
-NGL=99
-```
-
-### Context size
-
-Context рассчитывается исходя из памяти, оставшейся после оценки GPU offload.
-
-Ограничения:
-
-```text
-GPU path: 512 ... 16384
-CPU path: 512 ... 8192
+GPU: 512 ... 16384
+CPU: 512 ... 8192
 ```
 
 ### Batch
 
-Базовое значение:
-
 ```text
-512  — при GPU > 6000 MiB
-256  — иначе
+GPU > 6000 MiB → 512
+иначе          → 256
 ```
 
-### Другие параметры
-
-По умолчанию включаются:
+### Runtime defaults
 
 ```text
 FLASH_ATTN=on
@@ -602,21 +528,25 @@ PARALLEL=1
 --mlock
 ```
 
-Все вычисленные параметры печатаются в логах перед стартом `llama-server`.
+Рассчитанные параметры выводятся в лог перед запуском `llama-server`.
 
 ---
 
-## 🔌 MCP-адаптер
+# 🔌 HTTP / MCP-style adapter
 
-`mcp_adapter.py` — небольшой Flask-сервис, который работает как HTTP-слой перед `llama-server`.
+Файл:
 
-### Endpoint
+```text
+mcp_adapter.py
+```
+
+Endpoint:
 
 ```http
 POST /complete
 ```
 
-Минимальное тело:
+Минимальный запрос:
 
 ```json
 {
@@ -624,7 +554,7 @@ POST /complete
 }
 ```
 
-Параметры:
+Поддерживаемые параметры:
 
 ```json
 {
@@ -635,49 +565,28 @@ POST /complete
 }
 ```
 
-Adapter преобразует запрос в формат `llama-server`:
-
-```text
-client
-  │
-  ▼
-:8082 /complete
-  │
-  ▼
-:8081 /completion
-  │
-  ▼
-llama.cpp
-```
-
-Проверка health endpoint:
+Health check:
 
 ```bash
 curl http://localhost:8082/health
 ```
 
-Ожидаемый ответ:
-
-```json
-{"status":"ok"}
-```
-
 ---
 
-## ☸️ Работа с Kubernetes
+# ☸️ Kubernetes
 
-Для Kubernetes создаются:
+Проект предусматривает:
 
 ```text
-namespace
-runtime class
-persistent volume claim
-config map
-service
-deployment
+Namespace
+RuntimeClass
+PersistentVolumeClaim
+ConfigMap
+Service
+Deployment
 ```
 
-Базовые manifests находятся в:
+Базовые templates находятся в:
 
 ```text
 ansible/roles/llama-deploy/templates/
@@ -685,13 +594,9 @@ ansible/roles/llama-deploy/templates/
 
 ### Single-node
 
-Используется:
-
 ```text
 overlays/single-node
 ```
-
-и устанавливает:
 
 ```text
 replicas = 1
@@ -699,81 +604,69 @@ replicas = 1
 
 ### Multi-node
 
-Используется:
-
 ```text
 overlays/multi-node
 ```
 
-Количество реплик определяется переменной:
+Количество replicas задаётся `llama_replicas`. Если override отсутствует, используется число GPU как ориентир:
 
 ```text
-llama_replicas
+GPU count > 0 → replicas = GPU count
+GPU count = 0 → replicas = 1
 ```
 
-При отсутствии override playbook стремится использовать число GPU как число реплик:
-
-```text
-GPU count > 0  → replicas = GPU count
-GPU count = 0  → replicas = 1
-```
-
-### GPU runtime
-
-Deployment использует:
+GPU runtime:
 
 ```yaml
 runtimeClassName: nvidia
 ```
 
-и запрашивает:
+GPU resource:
 
 ```yaml
-nvidia.com/gpu: 1
+resources:
+  limits:
+    nvidia.com/gpu: 1
 ```
 
 ---
 
-## 🔄 CI/CD
+# 🔄 CI/CD
 
-GitHub Actions workflow:
+Workflow:
 
 ```text
 .github/workflows/deploy.yml
 ```
 
-### Автоматический запуск
-
-Workflow запускается на:
+Автоматический запуск:
 
 ```text
 push → main
 ```
 
-### Ручной запуск
+Manual workflow (`workflow_dispatch`) поддерживает:
 
-Поддерживается `workflow_dispatch` с параметрами:
-
-| Параметр | Назначение |
+| Input | Значения |
 |---|---|
-| `orchestrator` | `compose`, `k3s` или `k8s` |
-| `models_list` | Список моделей через запятую |
-| `auto_convert` | Автоматическая конвертация |
+| `orchestrator` | `compose`, `k3s`, `k8s` |
+| `models_list` | список моделей через запятую |
+| `auto_convert` | включить / выключить conversion |
 
-### Pipeline
+Pipeline:
 
 ```mermaid
 flowchart LR
     A[Push to main] --> B[GitHub Actions]
     B --> C[Install Ansible]
-    C --> D[Load SSH private key]
+    C --> D[Load SSH key]
     D --> E[ansible-playbook]
     E --> F[Remote infrastructure]
     F --> G[Build llama image]
     G --> H[Deploy]
 ```
 
-Для подключения используются GitHub Secrets:
+Secrets:
 
 ```text
 SSH_PRIVATE_KEY
@@ -782,59 +675,45 @@ VPS_IP
 
 ---
 
-## 🧪 Тестирование и проверка
+# 🧪 Тестирование и smoke validation
 
-В текущей версии репозитория отдельного автоматического test suite (`pytest`, integration tests и т. п.) нет. Поэтому проверка выполняется как **infrastructure/smoke validation**.
+Отдельного `pytest`/integration test suite в текущей версии нет. Поэтому перед merge/deploy используется infrastructure smoke validation.
 
-### Проверка контейнера
+### Docker
 
 ```bash
 docker compose ps
-```
-
-```bash
 docker compose logs llama-server
 ```
 
-### Проверка GPU внутри контейнера
+### GPU
 
 ```bash
 docker exec -it llama-server nvidia-smi
 ```
 
-### Проверка основного HTTP-сервера
+### llama-server
 
 ```bash
 curl http://localhost:8081
 ```
 
-### Проверка MCP adapter
+### MCP adapter
 
 ```bash
 curl http://localhost:8082/health
 ```
 
-### Проверка Kubernetes
+### Kubernetes
 
 ```bash
 kubectl get nodes
-```
-
-```bash
 kubectl get pods -n llama
-```
-
-```bash
 kubectl get svc -n llama
-```
-
-```bash
 kubectl get deployment -n llama
 ```
 
-### Проверка Ansible
-
-Для диагностического запуска:
+### Ansible
 
 ```bash
 ansible-playbook \
@@ -844,7 +723,7 @@ ansible-playbook \
   -v
 ```
 
-### Что следует проверять перед merge/deploy
+### Checklist
 
 ```text
 [ ] Ansible playbook проходит без fatal errors
@@ -853,133 +732,100 @@ ansible-playbook \
 [ ] модель обнаруживается
 [ ] llama-server стартует
 [ ] :8081 доступен
-[ ] :8082 доступен при MCP_ENABLED=1
+[ ] :8082 доступен при включённом MCP
 [ ] Kubernetes pods переходят в Running
 [ ] Deployment получает GPU resource
 ```
 
 ---
 
-## 🌿 Git и ветки
+# 🌿 Git workflow
 
-На момент подготовки документации в репозитории присутствуют:
+Текущие основные ветки:
 
 ```text
 main
-dev
+ dev
 ```
 
-Также зафиксирован tag:
+Также присутствует tag:
 
 ```text
 v0.0.1
 ```
 
-### Назначение веток
-
 | Ветка | Назначение |
 |---|---|
-| `main` | Стабильное состояние и источник production deployment |
-| `dev` | Основная ветка текущей разработки |
+| `main` | стабильное состояние и источник deployment |
+| `dev` | текущая разработка |
 
-GitHub Actions настроен на автоматический deployment только из:
-
-```text
-main
-```
-
-### Рекомендуемый workflow
-
-Новые изменения лучше вести в отдельных feature-ветках:
+Рекомендуемый workflow:
 
 ```bash
 git checkout dev
 git pull
-
 git checkout -b feature/<name>
 ```
 
 После завершения:
 
 ```bash
+git add .
+git commit -m "feat: <description>"
 git push -u origin feature/<name>
 ```
 
-Далее:
+Затем:
 
 ```text
 feature/*
-   ↓
+    ↓
 Pull Request
-   ↓
+    ↓
 dev
-   ↓
-проверка
-   ↓
+    ↓
+validation
+    ↓
 main
-   ↓
+    ↓
 deployment
 ```
 
-Так production-ветка не смешивается с незавершённой разработкой.
-
 ---
 
-## ⚠️ Известные ограничения
+# ⚠️ Известные ограничения
 
-Этот раздел намеренно отражает **текущее состояние репозитория**, а не предполагаемое.
+Этот раздел отражает именно текущее состояние репозитория.
 
-### 1. Конвертация моделей: имя файла скрипта не совпадает
+### 1. Model conversion entrypoint
 
-В репозитории находится:
+В tree находится:
 
 ```text
 ansible/scripts/convert_model.py
 ```
 
-но `convert_model.yml` и роль `llama-build` ссылаются на:
+при этом отдельные части automation path ссылаются на:
 
 ```text
 scripts/convert_models.py
 ```
 
-То есть текущий automation path для model conversion требует синхронизации имён.
+Имена нужно синхронизировать перед тем, как считать conversion pipeline полностью воспроизводимым.
 
-### 2. `model_info.py` отсутствует в репозитории
+### 2. Model metadata
 
-`entrypoint.sh` предусматривает использование:
+`entrypoint.sh` предусматривает `/app/model_info.py`, но отдельного `model_info.py` в текущем tree нет. Поэтому используется fallback-логика.
 
-```text
-/app/model_info.py
-```
+### 3. Kubernetes storage
 
-для получения metadata модели, однако этот файл отсутствует в текущем tree.
+Используется `models-pvc` с `ReadOnlyMany`, но отдельный PV в репозитории не описан. Фактический storage зависит от конфигурации целевого кластера.
 
-Поэтому предусмотрен fallback на приблизительные значения.
+### 4. K3s
 
-### 3. Kubernetes PVC не содержит описанного PV
+Текущая role ориентирована на server mode и использует `--disable-agent`. Полноценный отдельный worker join workflow не реализован.
 
-В manifest присутствует:
-
-```text
-models-pvc
-```
-
-с `ReadOnlyMany`, но отдельный `PersistentVolume` в репозитории не описан.
-
-Фактическое создание volume поэтому зависит от конфигурации storage на целевом Kubernetes-кластере.
-
-### 4. K3s-конфигурация сейчас ориентирована на серверный режим
-
-В роли K3s устанавливается server с:
-
-```text
---disable-agent
-```
-
-При этом отдельный worker join workflow для K3s в текущем репозитории не реализован.
-
-### 5. CUDA architecture зафиксирована
+### 5. CUDA architecture
 
 Docker build использует:
 
@@ -987,38 +833,93 @@ Docker build использует:
 DLLAMA_CUDA_ARCH=89
 ```
 
-то есть образ ориентирован на соответствующую CUDA compute capability, а не на универсальную автоматическую сборку под все GPU.
+Поэтому текущий image не является универсальным build для всех NVIDIA GPU.
 
-### 6. Compose-файл для локального запуска содержит machine-specific model path
+### 6. Machine-specific Compose path
 
-В корневом `docker-compose.yml` указан конкретный host path:
+Корневой `docker-compose.yml` содержит конкретный host path для каталога моделей. На другой машине mapping потребуется изменить.
+
+---
+
+# 🗺 Roadmap
 
 ```text
-/home/k3rnel_co0n/llama.cpp/models
+[x] Docker + CUDA inference image
+[x] CPU/RAM/GPU discovery
+[x] Runtime auto-tuning
+[x] Ansible provisioning
+[x] Compose deployment
+[x] K3s deployment path
+[x] Kubernetes manifests
+[x] Single-node / multi-node overlays
+[x] HTTP adapter
+[x] CI/CD deployment
+[ ] unify model conversion entrypoints
+[ ] stable model metadata module
+[ ] automated smoke / integration tests
+[ ] Kubernetes storage provisioning
+[ ] full multi-node K3s workflow
+[ ] configurable CUDA architecture
+[ ] remove machine-specific Compose paths
+[ ] Kubernetes health/readiness probes
+[ ] stricter configuration validation
+[ ] dedicated secrets/config separation
+[ ] release workflow + changelog
 ```
 
-Для другого хоста этот путь необходимо изменить.
+---
+
+# 🔭 Архитектурное направление
+
+Текущая архитектура специально разделяет deployment/inference слой и позволяет подключать внешний control plane без превращения `llama-k8s` в монолит:
+
+```text
+┌─────────────────────────────────────┐
+│          Control / API layer        │
+└──────────────────┬──────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────┐
+│         Model / inference layer     │
+│                                     │
+│       llama-server → model runtime  │
+└──────────────────┬──────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────┐
+│        Orchestration layer          │
+│                                     │
+│ Docker Compose / K3s / Kubernetes   │
+└──────────────────┬──────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────┐
+│       Infrastructure layer          │
+│                                     │
+│ Linux / CPU / RAM / GPU / storage   │
+└─────────────────────────────────────┘
+```
 
 ---
 
-## 🗺 Roadmap
+# 🤝 Основная инженерная задача
 
-План дальнейшего развития проекта может включать:
+`llama-k8s` исследует практическую задачу:
 
-- [ ] унифицировать `convert_model.py` / `convert_models.py`;
-- [ ] вынести получение model metadata в отдельный стабильный модуль;
-- [ ] добавить автоматические smoke/integration tests;
-- [ ] сделать storage provision для Kubernetes;
-- [ ] завершить полноценный multi-node K3s workflow;
-- [ ] сделать CUDA architecture configurable вместо фиксированного `89`;
-- [ ] убрать machine-specific paths из root Compose;
-- [ ] добавить health/readiness probes для Kubernetes;
-- [ ] добавить более строгую валидацию входных параметров;
-- [ ] разделить secrets и deployment configuration;
-- [ ] добавить release workflow и changelog.
+> **Как автоматически развернуть локальный LLM inference workload на разном Linux/GPU hardware, минимизируя ручную конфигурацию и сохраняя единый deployment workflow?**
+
+Поэтому основной фокус проекта — не создание собственной LLM, а эксплуатация inference infrastructure:
+
+- provisioning;
+- containers;
+- GPU runtime;
+- resource-aware tuning;
+- model lifecycle;
+- orchestration;
+- deployment automation.
 
 ---
 
-## 📄 Лицензия
+# 📄 Лицензия
 
-В текущем репозитории файл лицензии представлен MIT LICENSE.
+Проект распространяется под лицензией **MIT**. См. [LICENSE](LICENSE).
