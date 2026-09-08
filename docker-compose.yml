@@ -17,7 +17,7 @@ services:
       # - CONTEXT=8192
       # - THREADS=12
     volumes:
-      - /home/k3rnel_co0n/llama.cpp/models:/models   # mount your models dir
+      - ${MODELS_DIR:-./models}:/models   # your models dir
     ports:
       - "8081:8081"          # llama-server API
       - "8082:8082"          # MCP adapter HTTP

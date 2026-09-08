@@ -61,7 +61,7 @@ else
 fi
 
 # Extract model metadata using Python script
-if command -v python3 &>/dev/null && [[ -f /app/model_info.py ]]; then
+if command -v python3 &>/dev/null && [[ -f /app/model_detector.py ]]; then
     MODEL_JSON=$(python3 /app/model_info.py "$MODEL_PATH")
     # Parse JSON fields
     BLOCK_COUNT=$(echo "$MODEL_JSON" | jq -r '.block_count')
@@ -75,12 +75,14 @@ if command -v python3 &>/dev/null && [[ -f /app/model_info.py ]]; then
         BLOCK_COUNT=32
         EMBEDDING_LENGTH=4096
         FILE_SIZE_MB=$(stat -c %s "$MODEL_PATH" 2>/dev/null | awk '{print int($1/1048576)}')
+	SIZE_LABEL="unknown"
     fi
 else
     # Fallback: use file size and guess
     BLOCK_COUNT=32
     EMBEDDING_LENGTH=4096
     FILE_SIZE_MB=$(stat -c %s "$MODEL_PATH" 2>/dev/null | awk '{print int($1/1048576)}')
+    SIZE_LABEL="unknown"
 fi
 
 # If BLOCK_COUNT is 0, set default
