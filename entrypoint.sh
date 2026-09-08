@@ -2,6 +2,11 @@
 set -euo pipefail
 
 # ======================================================================
+# Use virtual environment's Python if available
+# ======================================================================
+export PATH="${VENV_PATH:-/opt/venv}/bin:$PATH"
+
+# ======================================================================
 # Fully automated entrypoint for llamaserver
 # All parameters are computed from live system data and model metadata
 # ======================================================================
@@ -47,9 +52,10 @@ GPU_TOTAL=${GPU_TOTAL:-0}
 
 MODEL_DIR="${MODEL_DIR:-/models}"
 if [[ -z "${MODEL_NAME:-}" ]]; then
-    MODEL_PATH=$(find "$MODEL_DIR" -maxdepth 1 -type f -name "*.gguf" | head -n1)
+    # Поиск моделей разных форматов
+    MODEL_PATH=$(find "$MODEL_DIR" -maxdepth 1 -type f \( -name "*.gguf" -o -name "*.safetensors" -o -name "*.bin" \) | head -n1)
     if [[ -z "$MODEL_PATH" ]]; then
-        echo "ERROR: No .gguf model found in $MODEL_DIR and MODEL_NAME not set."
+        echo "ERROR: No model file found in $MODEL_DIR and MODEL_NAME not set."
         exit 1
     fi
 else
@@ -60,34 +66,33 @@ else
     fi
 fi
 
-# Extract model metadata using Python script
+# Extract model metadata using model_detector.py
 if command -v python3 &>/dev/null && [[ -f /app/model_detector.py ]]; then
-    MODEL_JSON=$(python3 /app/model_info.py "$MODEL_PATH")
-    # Parse JSON fields
-    BLOCK_COUNT=$(echo "$MODEL_JSON" | jq -r '.block_count')
-    EMBEDDING_LENGTH=$(echo "$MODEL_JSON" | jq -r '.embedding_length')
-    FILE_SIZE_MB=$(echo "$MODEL_JSON" | jq -r '.file_size_mb')
-    ARCH=$(echo "$MODEL_JSON" | jq -r '.architecture')
-    SIZE_LABEL=$(echo "$MODEL_JSON" | jq -r '.size_label')
-    # If jq is not available, use python to parse
-    if [[ -z "$BLOCK_COUNT" || "$BLOCK_COUNT" == "null" ]]; then
-        # Fallback to estimates
-        BLOCK_COUNT=32
+    MODEL_JSON=$(python3 /app/model_detector.py "$MODEL_PATH")
+    # Parse JSON fields (используем правильные имена полей)
+    NUM_LAYERS=$(echo "$MODEL_JSON" | jq -r '.num_layers // 32')
+    EMBEDDING_LENGTH=$(echo "$MODEL_JSON" | jq -r '.embedding_length // 4096')
+    FILE_SIZE_MB=$(echo "$MODEL_JSON" | jq -r '.file_size_mb // 5000')
+    ARCH=$(echo "$MODEL_JSON" | jq -r '.architecture // "unknown"')
+    SIZE_LABEL=$(echo "$MODEL_JSON" | jq -r '.size_label // "unknown"')
+    # Если jq не сработал или поля null, используем fallback
+    if [[ -z "$NUM_LAYERS" || "$NUM_LAYERS" == "null" ]]; then
+        NUM_LAYERS=32
         EMBEDDING_LENGTH=4096
         FILE_SIZE_MB=$(stat -c %s "$MODEL_PATH" 2>/dev/null | awk '{print int($1/1048576)}')
-	SIZE_LABEL="unknown"
+        SIZE_LABEL="unknown"
     fi
 else
     # Fallback: use file size and guess
-    BLOCK_COUNT=32
+    NUM_LAYERS=32
     EMBEDDING_LENGTH=4096
     FILE_SIZE_MB=$(stat -c %s "$MODEL_PATH" 2>/dev/null | awk '{print int($1/1048576)}')
     SIZE_LABEL="unknown"
 fi
 
-# If BLOCK_COUNT is 0, set default
-if [[ "$BLOCK_COUNT" -eq 0 ]]; then BLOCK_COUNT=32; fi
-if [[ -z "$FILE_SIZE_MB" || "$FILE_SIZE_MB" -eq 0 ]]; then FILE_SIZE_MB=5000; fi
+# Ensure variables are numbers
+if [[ -z "$NUM_LAYERS" || "$NUM_LAYERS" == "null" ]]; then NUM_LAYERS=32; fi
+if [[ -z "$FILE_SIZE_MB" || "$FILE_SIZE_MB" == "null" || "$FILE_SIZE_MB" -eq 0 ]]; then FILE_SIZE_MB=5000; fi
 
 #  4. CPU thread optimization 
 
@@ -120,8 +125,8 @@ VRAM_AVAILABLE=$((GPU_FREE - VRAM_SAFETY))
 if [[ $VRAM_AVAILABLE -lt 0 ]]; then VRAM_AVAILABLE=0; fi
 
 # Estimate VRAM per layer: total file size / number of layers (rough)
-if [[ $BLOCK_COUNT -gt 0 ]]; then
-    VRAM_PER_LAYER=$((FILE_SIZE_MB / BLOCK_COUNT))
+if [[ $NUM_LAYERS -gt 0 ]]; then
+    VRAM_PER_LAYER=$((FILE_SIZE_MB / NUM_LAYERS))
 else
     VRAM_PER_LAYER=150
 fi
@@ -145,19 +150,8 @@ if [[ $NGL -gt 0 ]]; then
     MODEL_USED_VRAM=$((NGL * VRAM_PER_LAYER))
     REMAINING_VRAM=$((VRAM_AVAILABLE - MODEL_USED_VRAM))
     if [[ $REMAINING_VRAM -lt 0 ]]; then REMAINING_VRAM=0; fi
-    # KV cache per token: depends on embedding size and layers, but we use a rough formula
-    # For Llama-like architectures: KV cache size per token ≈ (2 * n_layers * embedding_dim * precision) / (1024*1024) MB
-    # For Q4 cache, precision = 4/8 bytes? Actually cache is quantized to q4_0, so 4 bits per value.
-    # But we'll use empirical constant: 0.45 MB/token for 8B with Q4, scale linearly with embedding_dim and layers.
-    # Since we have EMBEDDING_LENGTH and BLOCK_COUNT, compute more accurately.
-    # For a typical 8B (n_layers=32, embedding=4096), KV cache per token ≈ 0.45 MB.
-    # So factor = 0.45 / (32 * 4096) per token per layer per embedding.
-    # But we can just use a constant for simplicity, or compute:
-    KV_BYTES_PER_TOKEN = (2 * BLOCK_COUNT * EMBEDDING_LENGTH * 4) / (1024*1024)  # 4 bytes for q4_0
-    # Actually for Q4, it's 4 bits, but it's stored as 8-bit? In GGUF, Q4_0 uses 4-bit values packed, so factor 0.5 bytes per value.
-    # Let's assume we use Q4 cache, so each value is 4 bits = 0.5 bytes.
-    # Then KV cache per token = 2 * n_layers * embedding_length * 0.5 / (1024*1024) MB.
-    KV_MB_PER_TOKEN=$(echo "scale=4; (2 * $BLOCK_COUNT * $EMBEDDING_LENGTH * 0.5) / (1024*1024)" | bc)
+    # Compute KV cache per token in MB
+    KV_MB_PER_TOKEN=$(echo "scale=4; (2 * $NUM_LAYERS * $EMBEDDING_LENGTH * 0.5) / (1024*1024)" | bc)
     if [[ -z "$KV_MB_PER_TOKEN" || "$KV_MB_PER_TOKEN" == "0" ]]; then
         KV_MB_PER_TOKEN=0.45
     fi
@@ -205,7 +199,7 @@ echo "=============================================="
 echo "Model path: $MODEL_PATH"
 echo "Architecture: ${ARCH:-unknown}"
 echo "Size label: ${SIZE_LABEL:-unknown}"
-echo "Layers (blocks): $BLOCK_COUNT"
+echo "Layers (blocks): $NUM_LAYERS"
 echo "Embedding length: $EMBEDDING_LENGTH"
 echo "File size (est. VRAM): $FILE_SIZE_MB MiB"
 echo "Physical cores: $PHYSICAL_CORES"
@@ -228,7 +222,9 @@ echo "MLock: $MLOCK"
 echo "=============================================="
 
 #  7. Launch llamaserver 
-CMD="/app/llama.cpp/build/bin/llama-server \
+LLAMA_SERVER="${LLAMA_SERVER_PATH:-/app/llama.cpp/build/bin/llama-server}"
+
+CMD="$LLAMA_SERVER \
     -m \"$MODEL_PATH\" \
     --host \"${HOST:-0.0.0.0}\" \
     --port \"${PORT:-8081}\" \
