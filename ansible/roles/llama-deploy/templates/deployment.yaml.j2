@@ -3,118 +3,65 @@ kind: Deployment
 metadata:
   name: llama-server
   namespace: llama
-  labels:
-    app: llama-server
 spec:
-  replicas: {{ llama_replicas | default(1) }}
+  replicas: 1
+  strategy:
+    type: Recreate
   selector:
-    matchLabels:
-      app: llama-server
+    matchLabels: {app: llama-server}
   template:
     metadata:
-      labels:
-        app: llama-server
+      labels: {app: llama-server}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+{% if llama_gpu %}
       runtimeClassName: nvidia
+{% endif %}
       containers:
         - name: llama-server
-          image: llama-server-cuda:latest
+          image: {{ llama_image | to_json }}
           imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 8081
-            - containerPort: 8082
-          env:
-            - name: MODEL_DIR
-              value: /models
-            - name: MCP_ENABLED
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: MCP_ENABLED
-            - name: HOST
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: HOST
-            - name: PORT
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: PORT
-            - name: MODEL_NAME
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: MODEL_NAME
-            - name: NGL
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: NGL
-            - name: CONTEXT
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: CONTEXT
-            - name: BATCH
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: BATCH
-            - name: THREADS
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: THREADS
-            - name: THREADS_BATCH
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: THREADS_BATCH
-            - name: FLASH_ATTN
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: FLASH_ATTN
-            - name: CACHE_TYPE_K
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: CACHE_TYPE_K
-            - name: CACHE_TYPE_V
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: CACHE_TYPE_V
-            - name: PARALLEL
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: PARALLEL
-            - name: CONT_BATCHING
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: CONT_BATCHING
-            - name: MLOCK
-              valueFrom:
-                configMapKeyRef:
-                  name: llama-config
-                  key: MLOCK
-          volumeMounts:
-            - name: models
-              mountPath: /models
-              readOnly: true
+          args: ["-m", "/models/{{ llama_model_name }}", "--host", "0.0.0.0", "--port", "8081", "-c", "{{ llama_context }}", "--threads", "{{ llama_threads }}", "-ngl", "{{ 99 if llama_gpu else 0 }}"]
+          ports: [{containerPort: 8081, name: http}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 20
           resources:
-            limits:
-              nvidia.com/gpu: 1
-              memory: {{ llama_memory_limit | default('8Gi') }}
-              cpu: {{ llama_cpu_limit | default('4') }}
             requests:
+              memory: {{ llama_memory | to_json }}
+              cpu: {{ llama_cpus | string | to_json }}
+{% if llama_gpu %}
               nvidia.com/gpu: 1
-              memory: {{ llama_memory_limit | default('8Gi') }}
-              cpu: {{ llama_cpu_limit | default('4') }}
+{% endif %}
+            limits:
+              memory: {{ llama_memory | to_json }}
+              cpu: {{ llama_cpus | string | to_json }}
+{% if llama_gpu %}
+              nvidia.com/gpu: 1
+{% endif %}
+          volumeMounts:
+            - {name: models, mountPath: /models, readOnly: true}
+            - {name: temporary, mountPath: /tmp}
       volumes:
         - name: models
           persistentVolumeClaim:
-            claimName: models-pvc
+            claimName: {{ llama_pvc | to_json }}
+        - name: temporary
+          emptyDir: {sizeLimit: 256Mi}

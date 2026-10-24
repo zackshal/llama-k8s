@@ -1,0 +1,13 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: llama-private, namespace: llama}
+spec:
+  podSelector: {matchLabels: {app: llama-server}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ llama_gateway_namespace | to_json }}
+      ports: [{protocol: TCP, port: 8081}]
+  egress: []

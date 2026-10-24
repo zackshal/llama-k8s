@@ -1,61 +1,104 @@
 ---
-- name: Deploy with Docker Compose
+- name: Create the owned deployment directory
+  ansible.builtin.file:
+    path: "{{ llama_project_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Deploy a private Compose workload
+  when: llama_runtime == 'compose'
   block:
-    - name: Render docker-compose.yml
-      template:
+    - name: Render the Compose candidate
+      ansible.builtin.template:
         src: docker-compose.yml.j2
-        dest: "{{ project_root }}/docker-compose.yml"
-        mode: '0644'
+        dest: "{{ llama_project_path }}/compose.next.yaml"
+        owner: root
+        group: root
+        mode: '0640'
 
-    - name: Start containers
-      docker_compose:
-        project_src: "{{ project_root }}"
-        state: present
-        restarted: yes
-  when: orchestrator == "compose"
+    - name: Validate Compose before activation
+      ansible.builtin.command:
+        argv: [docker, compose, -p, llama, -f, "{{ llama_project_path }}/compose.next.yaml", config, --quiet]
+      changed_when: false
 
-- name: Deploy with K3s / K8s
+    - name: Promote the validated configuration and retain the previous file
+      ansible.builtin.copy:
+        src: "{{ llama_project_path }}/compose.next.yaml"
+        dest: "{{ llama_project_path }}/compose.yaml"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0640'
+        backup: true
+
+    - name: Pull the immutable workload image
+      ansible.builtin.command:
+        argv: [docker, compose, -p, llama, -f, "{{ llama_project_path }}/compose.yaml", pull]
+      register: llama_pull
+      changed_when: "'Downloaded newer image' in llama_pull.stdout"
+
+    - name: Reconcile Compose without unconditional restarts
+      ansible.builtin.command:
+        argv: [docker, compose, -p, llama, -f, "{{ llama_project_path }}/compose.yaml", up, -d, --wait, --wait-timeout, '300']
+      register: llama_up
+      changed_when: "'Started' in llama_up.stderr or 'Created' in llama_up.stderr or 'Recreated' in llama_up.stderr"
+
+    - name: Verify actual model readiness over loopback
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8081/health
+        status_code: 200
+        timeout: 5
+      register: llama_health
+      until: llama_health.status | default(0) == 200
+      retries: 60
+      delay: 5
+
+- name: Deploy a private Kubernetes workload
+  when: llama_runtime == 'k3s'
   block:
-    - name: Ensure kubeconfig is exported
-      set_fact:
-        kubeconfig: "{{ '/etc/rancher/k3s/k3s.yaml' if orchestrator == 'k3s' else '/etc/kubernetes/admin.conf' }}"
-
-    - name: Create k8s manifests directory
-      file:
-        path: "{{ project_root }}/k8s"
+    - name: Create all manifest directories
+      ansible.builtin.file:
+        path: "{{ llama_project_path }}/k8s/{{ item }}"
         state: directory
+        owner: root
+        group: root
+        mode: '0750'
+      loop: [base, overlays/single-node, overlays/multi-node]
 
-    # Копируем статические манифесты (без изменений)
-    - name: Copy static manifests
-      copy:
-        src: "{{ item.src }}"
-        dest: "{{ project_root }}/k8s/{{ item.dest }}"
-      loop:
-        - { src: "templates/namespace.yaml", dest: "base/namespace.yaml" }
-        - { src: "templates/runtimeclass.yaml", dest: "base/runtimeclass.yaml" }
-        - { src: "templates/pv-model.yaml", dest: "base/pv-model.yaml" }
-        - { src: "templates/pvc-model.yaml", dest: "base/pvc-model.yaml" }
-        - { src: "templates/configmap.yaml", dest: "base/configmap.yaml" }
-        - { src: "templates/service.yaml", dest: "base/service.yaml" }
+    - name: Render resources including ConfigMap variables
+      ansible.builtin.template:
+        src: "{{ item }}"
+        dest: "{{ llama_project_path }}/k8s/base/{{ item | regex_replace('[.]j2$', '') }}"
+        owner: root
+        group: root
+        mode: '0640'
+      loop: [namespace.yaml, service.yaml, deployment.yaml.j2, network-policy.yaml, kustomization.yaml]
 
-    # Генерируем Deployment из шаблона с подстановкой переменных
-    - name: Render deployment.yaml from template
-      template:
-        src: deployment.yaml.j2
-        dest: "{{ project_root }}/k8s/base/deployment.yaml"
-        mode: '0644'
+    - name: Validate resources using the API without saving them
+      ansible.builtin.command:
+        argv: [/usr/local/bin/k3s, kubectl, apply, --dry-run=client, -k, "{{ llama_project_path }}/k8s/base"]
+      changed_when: false
 
-    # Копируем overlays (kustomization.yaml)
-    - name: Copy overlays
-      copy:
-        src: "{{ item.src }}"
-        dest: "{{ project_root }}/k8s/{{ item.dest }}"
-      loop:
-        - { src: "templates/kustomization-single.yaml", dest: "overlays/single-node/kustomization.yaml" }
-        - { src: "templates/kustomization-multi.yaml", dest: "overlays/multi-node/kustomization.yaml" }
+    - name: Apply the namespace first
+      ansible.builtin.command:
+        argv: [/usr/local/bin/k3s, kubectl, apply, -f, "{{ llama_project_path }}/k8s/base/namespace.yaml"]
+      register: llama_ns
+      changed_when: "'created' in llama_ns.stdout or 'configured' in llama_ns.stdout"
 
-    - name: Apply manifests
-      shell: |
-        export KUBECONFIG={{ kubeconfig }}
-        kubectl apply -k {{ project_root }}/k8s/overlays/{{ 'single-node' if groups['all'] | length == 1 else 'multi-node' }}
-  when: orchestrator in ["k3s", "k8s"]
+    - name: Require a pre-provisioned model PVC in the workload namespace
+      ansible.builtin.command:
+        argv: [/usr/local/bin/k3s, kubectl, get, pvc, "{{ llama_pvc }}", -n, llama]
+      changed_when: false
+
+    - name: Reconcile validated Kubernetes resources
+      ansible.builtin.command:
+        argv: [/usr/local/bin/k3s, kubectl, apply, -k, "{{ llama_project_path }}/k8s/base"]
+      register: llama_apply
+      changed_when: "'created' in llama_apply.stdout or 'configured' in llama_apply.stdout"
+
+    - name: Require the workload rollout to succeed
+      ansible.builtin.command:
+        argv: [/usr/local/bin/k3s, kubectl, rollout, status, deployment/llama-server, -n, llama, --timeout=300s]
+      changed_when: false

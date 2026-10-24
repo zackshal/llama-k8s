@@ -1,0 +1,6 @@
+all:
+  children:
+    llama_nodes:
+      hosts:
+        local:
+          ansible_connection: local
