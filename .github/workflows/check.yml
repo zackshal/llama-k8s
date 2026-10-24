@@ -1,0 +1,21 @@
+name: Validate
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  portable:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af6834
+      - name: Install validation dependencies
+        run: python3 -m pip install ansible-core==2.19.3 PyYAML==6.0.2 Jinja2==3.1.6 -r requirements-adapter.txt
+      - name: Test runtime, adapter and rendered manifests
+        run: |
+          python3 -m unittest discover -s tests -v
+          bash -n entrypoint.sh
+          git diff --check
+      - name: Validate deployment syntax without modifying hosts
+        working-directory: ansible
+        run: ansible-playbook -i inventory/production/hosts.ini playbooks/site.yml --syntax-check

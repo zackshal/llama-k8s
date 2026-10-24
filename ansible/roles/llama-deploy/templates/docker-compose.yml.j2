@@ -1,19 +1,36 @@
-version: '3.8'
+name: llama
 services:
   llama-server:
-    image: llama-server-cuda:latest
-    container_name: llama-server
-    runtime: nvidia
-    environment:
-      - MODEL_DIR=/models
-      - MCP_ENABLED={{ mcp_enabled | default('0') }}
-      - HOST=0.0.0.0
-      - PORT=8081
+    image: {{ llama_image | to_json }}
+    command: ["-m", "/models/{{ llama_model_name }}", "--host", "0.0.0.0", "--port", "8081", "-c", "{{ llama_context }}", "--threads", "{{ llama_threads }}", "-ngl", "{{ 99 if llama_gpu else 0 }}"]
+    user: "10001:10001"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
     volumes:
-      - {{ models_host_path }}:/models
-    ports:
-      - "8081:8081"
-      - "8082:8082"
+      - type: bind
+        source: {{ llama_models_path | to_json }}
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+    ports: ["127.0.0.1:8081:8081"]
+    cpus: {{ llama_cpus | string | to_json }}
+    mem_limit: {{ llama_compose_memory | to_json }}
+    pids_limit: 256
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--max-time", "3", "http://127.0.0.1:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+{% if llama_gpu %}
     deploy:
       resources:
         reservations:
@@ -21,4 +38,4 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    restart: unless-stopped
+{% endif %}

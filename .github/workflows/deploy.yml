@@ -1,51 +1,57 @@
-name: Deploy LLM Farm
-
+name: Reviewed deployment
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
-      orchestrator:
-        description: 'Orchestrator (compose, k3s, k8s)'
-        default: 'k3s'
+      release_sha:
+        description: Full reviewed commit SHA of this repository
         required: true
-      models_list:
-        description: 'Comma-separated list of models (e.g. model1.gguf,model2.safetensors)'
-        default: ''
-        required: false
-      auto_convert:
-        description: 'Auto-convert non-GGUF models'
-        default: 'true'
-        required: false
-
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    environment: production
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Ansible
-        run: |
-          sudo apt update
-          sudo apt install -y ansible sshpass
-
-      - name: Set up SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.VPS_IP }} >> ~/.ssh/known_hosts
-
-      - name: Run Ansible playbook
+      - name: Validate release identifier
         env:
-          ORCHESTRATOR: ${{ github.event.inputs.orchestrator || 'k3s' }}
-          MODELS_LIST: ${{ github.event.inputs.models_list || '' }}
-          AUTO_CONVERT: ${{ github.event.inputs.auto_convert || 'true' }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: '[[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af6834
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+      - name: Install controller dependencies
+        run: python3 -m pip install ansible-core==2.19.3 PyYAML==6.0.2 Jinja2==3.1.6 -r requirements-adapter.txt
+      - name: Revalidate the selected release before loading deployment secrets
         run: |
+          python3 -m unittest discover -s tests -v
           cd ansible
-          ansible-playbook playbooks/site.yml \
-            -i inventory/production/hosts.ini \
-            --extra-vars "orchestrator=$ORCHESTRATOR models_list=$MODELS_LIST auto_convert=$AUTO_CONVERT" \
-            -v
+          ansible-playbook -i inventory/production/hosts.ini playbooks/site.yml --syntax-check
+      - name: Prepare private controller inputs
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          INVENTORY: ${{ secrets.DEPLOY_INVENTORY }}
+          DEPLOY_VARS: ${{ secrets.DEPLOY_VARS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$SSH_KEY" && test -n "$KNOWN_HOSTS" && test -n "$INVENTORY" && test -n "$DEPLOY_VARS"
+          mkdir -p "$RUNNER_TEMP/llama-private" "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/llama-private/id"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$INVENTORY" > "$RUNNER_TEMP/llama-private/hosts.yml"
+          printf '%s\n' "$DEPLOY_VARS" > "$RUNNER_TEMP/llama-private/vars.yml"
+      - name: Apply explicit reviewed configuration
+        working-directory: ansible
+        run: |
+          ansible-playbook -i "$RUNNER_TEMP/llama-private/hosts.yml" playbooks/site.yml \
+            --private-key "$RUNNER_TEMP/llama-private/id" \
+            -e "@$RUNNER_TEMP/llama-private/vars.yml"
+      - name: Remove private inputs
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/llama-private"
