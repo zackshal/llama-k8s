@@ -1,0 +1,13 @@
+.git
+.github
+ansible
+models
+*.gguf
+*.safetensors
+*.env
+.env
+*.key
+*.pem
+logs
+__pycache__
+.venv

@@ -1,0 +1,18 @@
+[Unit]
+Description=llama-k8s managed K3s
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s {{ 'server' if inventory_hostname in groups['k3s_server'] else 'agent' }}
+Restart=on-failure
+RestartSec=5
+Delegate=yes
+KillMode=process
+LimitNOFILE=1048576
+LimitNPROC=infinity
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target

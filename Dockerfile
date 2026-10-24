@@ -1,39 +1,34 @@
-# Use CUDA 12.4 base image (compatible with driver 550)
-FROM nvidia/cuda:12.4.0-devel-ubuntu22.04
-
-# Install dependencies for building llama.cpp and Python for MCP
-RUN apt-get update && apt-get install -y \
-    git \
-    cmake \
-    build-essential \
-    python3 \
-    python3-pip \
-    bc \
+ARG BASE_IMAGE
+ARG RUNTIME_IMAGE
+FROM ${BASE_IMAGE} AS build
+ARG LLAMA_CPP_VERSION
+ARG GGML_CUDA=OFF
+ARG BUILD_JOBS=2
+RUN printf '%s' "$LLAMA_CPP_VERSION" | grep -Eq '^[a-f0-9]{40}$' \
+    && printf '%s' "$GGML_CUDA" | grep -Eq '^(ON|OFF)$' \
+    && printf '%s' "$BUILD_JOBS" | grep -Eq '^[1-9][0-9]?$'
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates git cmake build-essential \
     && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+RUN git init llama.cpp && cd llama.cpp \
+    && git remote add origin https://github.com/ggml-org/llama.cpp.git \
+    && git fetch --depth 1 origin "$LLAMA_CPP_VERSION" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "$LLAMA_CPP_VERSION"
+RUN cmake -S llama.cpp -B out -DGGML_CUDA="$GGML_CUDA" \
+      -DBUILD_SHARED_LIBS=OFF -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build out --target llama-server --parallel "$BUILD_JOBS"
 
-# Install Python requests for MCP adapter
-RUN pip3 install --no-cache-dir requests
-
+FROM ${RUNTIME_IMAGE} AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl libgomp1 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 llama \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin llama
 WORKDIR /app
-
-# Clone llama.cpp (specific commit for stability)
-RUN git clone https://github.com/ggerganov/llama.cpp.git && \
-    cd llama.cpp && \
-    git checkout a0ed91a44   # or use latest stable tag
-
-# Build only llama-server with CUDA support (Ada Lovelace arch 89)
-WORKDIR /app/llama.cpp
-RUN mkdir build && cd build && \
-    cmake .. -DLLAMA_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_CUDA_ARCH=89 && \
-    make -j$(nproc) llama-server
-
-# Copy entrypoint and MCP adapter
-COPY entrypoint.sh /entrypoint.sh
-COPY mcp_adapter.py /app/mcp_adapter.py
-RUN chmod +x /entrypoint.sh /app/mcp_adapter.py
-
-# Expose API port
+COPY --from=build /build/out/bin/llama-server /app/llama-server
+COPY --chmod=755 entrypoint.sh /entrypoint.sh
+USER 10001:10001
 EXPOSE 8081
-
-# Entrypoint
 ENTRYPOINT ["/entrypoint.sh"]

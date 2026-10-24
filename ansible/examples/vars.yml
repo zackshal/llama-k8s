@@ -1,0 +1,23 @@
+---
+llama_dedicated_host: false
+llama_runtime: compose
+llama_enable_workload: true
+llama_image: ""
+llama_model_name: ""
+llama_gpu: false
+llama_models_path: /srv/llama/models
+llama_project_path: /opt/llama
+llama_threads: 2
+llama_context: 2048
+llama_memory: 4Gi
+llama_compose_memory: 4g
+llama_cpus: "2"
+llama_pvc: models-pvc
+llama_gateway_namespace: llama-gateway
+llama_manage_k3s: false
+llama_network_prepared: false
+llama_k3s_version: ""
+llama_k3s_sha256: ""
+llama_k3s_server_url: ""
+llama_k3s_token: ""
+llama_pod_security_version: ""

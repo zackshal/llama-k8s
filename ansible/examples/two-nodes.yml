@@ -1,0 +1,19 @@
+all:
+  children:
+    llama_nodes:
+      children:
+        k3s_server:
+          hosts:
+            fi01:
+              ansible_host: 10.66.0.11
+              ansible_user: operator
+              llama_k3s_node_ip: 10.66.0.11
+              llama_k3s_api_bind: 10.66.0.11
+              llama_k3s_flannel_iface: wg0
+        k3s_agents:
+          hosts:
+            ee01:
+              ansible_host: 10.66.0.12
+              ansible_user: operator
+              llama_k3s_node_ip: 10.66.0.12
+              llama_k3s_flannel_iface: wg0

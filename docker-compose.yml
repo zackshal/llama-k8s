@@ -1,30 +1,32 @@
-# docker-compose.yml – run both llama-server and MCP adapter
-version: '3.8'
-
+name: llama-local
 services:
   llama-server:
-    build: .
-    container_name: llama-server
-    runtime: nvidia          # enables GPU support
-    environment:
-      - MODEL_DIR=/models
-      # MODEL_NAME: optional, auto‑pick first .gguf if not set
-      - HOST=0.0.0.0
-      - PORT=8081
-      - MCP_ENABLED=1        # start MCP adapter inside the same container
-      # All other parameters are auto‑detected, but can be overridden:
-      # - NGL=60
-      # - CONTEXT=8192
-      # - THREADS=12
+    image: ${LLAMA_IMAGE:?Set a reviewed image reference including @sha256 digest}
+    command: ["-m", "/models/${MODEL_NAME:?Set one GGUF filename}", "--host", "0.0.0.0", "--port", "8081", "-ngl", "0", "-c", "2048"]
+    user: "10001:10001"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
     volumes:
-      - /home/k3rnel_co0n/llama.cpp/models:/models   # mount your models dir
-    ports:
-      - "8081:8081"          # llama-server API
-      - "8082:8082"          # MCP adapter HTTP
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - type: bind
+        source: ${MODELS_DIR:?Set an existing directory containing the model}
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+    ports: ["127.0.0.1:8081:8081"]
+    cpus: "2"
+    mem_limit: 4g
+    pids_limit: 256
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--max-time", "3", "http://127.0.0.1:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
