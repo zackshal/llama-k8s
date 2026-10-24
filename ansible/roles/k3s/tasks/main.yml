@@ -1,99 +1,153 @@
 ---
-# ============================================================
-# Role: k3s
-# Description: Installs lightweight Kubernetes (K3s) on any architecture.
-#              Automatically detects architecture (amd64, arm64, armv7, etc.)
-#              and configures containerd for GPU support if NVIDIA drivers exist.
-# ============================================================
+- name: Inspect existing K3s ownership
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /usr/local/bin/k3s
+    - /etc/llama-k8s/k3s-version
+    - /etc/llama-k8s/k3s-role
+  register: k3s_existing
 
-- name: Check if K3s is already installed
-  stat:
-    path: /usr/local/bin/k3s
-  register: k3s_binary
+- name: Refuse adoption of another K3s installation
+  ansible.builtin.assert:
+    that:
+      - not k3s_existing.results[0].stat.exists or (k3s_existing.results[1].stat.exists and k3s_existing.results[2].stat.exists)
+    fail_msg: Existing unmanaged K3s requires a separate migration plan.
 
-- name: Install K3s (if not present)
-  shell: |
-    curl -sfL https://get.k3s.io | \
-    INSTALL_K3S_VERSION={{ k3s_version | default('latest') }} \
-    INSTALL_K3S_EXEC="server --disable-agent" \
-    sh -
-  args:
-    creates: /usr/local/bin/k3s
-  when: not k3s_binary.stat.exists
-  environment:
-    # Additional flags can be passed via k3s_install_flags variable
-    INSTALL_K3S_EXEC: "{{ k3s_install_flags | default('') }}"
+- name: Read the managed K3s version
+  ansible.builtin.slurp:
+    src: /etc/llama-k8s/k3s-version
+  register: k3s_installed_version
+  when: k3s_existing.results[1].stat.exists
 
-- name: Set kubeconfig permissions (readable by all users)
-  file:
-    path: /etc/rancher/k3s/k3s.yaml
-    mode: '0644'
+- name: Refuse implicit cluster upgrades
+  ansible.builtin.assert:
+    that:
+      - (k3s_installed_version.content | b64decode | trim) == llama_k3s_version
+    fail_msg: Cluster upgrades require a separately tested backup and migration procedure.
+  when: k3s_existing.results[1].stat.exists
 
-- name: Create .kube directory for root
-  file:
-    path: /root/.kube
+- name: Read the managed K3s role
+  ansible.builtin.slurp:
+    src: /etc/llama-k8s/k3s-role
+  register: k3s_installed_role
+  when: k3s_existing.results[2].stat.exists
+
+- name: Refuse implicit role changes
+  ansible.builtin.assert:
+    that:
+      - (k3s_installed_role.content | b64decode | trim) == ('server' if inventory_hostname in groups['k3s_server'] else 'agent')
+    fail_msg: Server and agent role changes require a separate migration.
+  when: k3s_existing.results[2].stat.exists
+
+- name: Install K3s host prerequisites
+  ansible.builtin.apt:
+    name: [ca-certificates, iptables, iproute2, conntrack, socat]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create private configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
     state: directory
+    owner: root
+    group: root
     mode: '0700'
+  loop:
+    - /etc/rancher/k3s
+    - /etc/llama-k8s
 
-- name: Copy kubeconfig to root's home
-  copy:
-    src: /etc/rancher/k3s/k3s.yaml
-    dest: /root/.kube/config
-    remote_src: yes
+- name: Fetch the reviewed K3s binary with a required checksum
+  ansible.builtin.get_url:
+    url: "https://github.com/k3s-io/k3s/releases/download/{{ llama_k3s_version }}/k3s"
+    dest: /usr/local/bin/k3s
+    checksum: "sha256:{{ llama_k3s_sha256 }}"
+    owner: root
+    group: root
+    mode: '0755'
+  notify: Restart managed K3s
+
+- name: Store the join token outside command arguments
+  ansible.builtin.copy:
+    content: "{{ llama_k3s_token }}\n"
+    dest: /etc/rancher/k3s/join-token
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  notify: Restart managed K3s
+
+- name: Render explicit server or agent configuration
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Restart managed K3s
+
+- name: Install the owned K3s service
+  ansible.builtin.template:
+    src: k3s.service.j2
+    dest: /etc/systemd/system/llama-k3s.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart managed K3s
+
+- name: Record the managed role
+  ansible.builtin.copy:
+    content: "{{ 'server' if inventory_hostname in groups['k3s_server'] else 'agent' }}\n"
+    dest: /etc/llama-k8s/k3s-role
+    owner: root
+    group: root
     mode: '0600'
 
-- name: Symlink kubectl to k3s binary
-  file:
-    src: /usr/local/bin/k3s
-    dest: /usr/local/bin/kubectl
-    state: link
+- name: Record the managed release
+  ansible.builtin.copy:
+    content: "{{ llama_k3s_version }}\n"
+    dest: /etc/llama-k8s/k3s-version
+    owner: root
+    group: root
+    mode: '0600'
 
-#  GPU Support 
-- name: Check if NVIDIA drivers are loaded
-  command: nvidia-smi
-  register: nvidia_check
-  ignore_errors: yes
+- name: Apply pending service changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start managed K3s
+  ansible.builtin.systemd_service:
+    name: llama-k3s
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for administrative kubeconfig creation
+  ansible.builtin.wait_for:
+    path: /etc/rancher/k3s/k3s.yaml
+    timeout: 180
+  when: inventory_hostname in groups['k3s_server']
+
+- name: Point local administration at the private API bind address
+  ansible.builtin.command:
+    argv: [/usr/local/bin/k3s, kubectl, config, set-cluster, default, "--server=https://{{ llama_k3s_api_bind }}:6443", --kubeconfig=/etc/rancher/k3s/k3s.yaml]
   changed_when: false
+  when: inventory_hostname in groups['k3s_server']
 
-- name: Configure containerd for GPU support (if NVIDIA is present)
-  block:
-    - name: Ensure containerd config directory exists
-      file:
-        path: /var/lib/rancher/k3s/agent/etc/containerd
-        state: directory
-        mode: '0755'
-
-    - name: Create containerd config.toml for GPU support
-      copy:
-        dest: /var/lib/rancher/k3s/agent/etc/containerd/config.toml
-        content: |
-          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia]
-            runtime_type = "io.containerd.runc.v2"
-            [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia.options]
-              BinaryName = "/usr/bin/nvidia-container-runtime"
-        mode: '0644'
-      notify: restart k3s
-
-    - name: Set environment variable for containerd to use NVIDIA runtime
-      lineinfile:
-        path: /etc/systemd/system/k3s.service.env
-        create: yes
-        line: "K3S_CONTAINERD_CONFIG=/var/lib/rancher/k3s/agent/etc/containerd/config.toml"
-        mode: '0644'
-      notify: restart k3s
-
-  when: nvidia_check.rc == 0 and ansible_facts['architecture'] == 'x86_64'
-
-#  Handlers 
-- name: Flush handlers (restart k3s if needed)
-  meta: flush_handlers
-
-#  Final status 
-- name: Verify K3s is running
-  shell: kubectl get nodes
-  register: k3s_status
+- name: Wait for the server API to become ready
+  ansible.builtin.command:
+    argv: [/usr/local/bin/k3s, kubectl, get, --raw=/readyz]
+  register: k3s_ready
+  until: k3s_ready.rc == 0
+  retries: 30
+  delay: 5
   changed_when: false
+  when: inventory_hostname in groups['k3s_server']
 
-- name: Show K3s status
-  debug:
-    msg: "K3s is running: {{ k3s_status.stdout }}"
+- name: Enforce private administrative kubeconfig
+  ansible.builtin.file:
+    path: /etc/rancher/k3s/k3s.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  when: inventory_hostname in groups['k3s_server']

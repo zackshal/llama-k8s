@@ -1,0 +1,19 @@
+token-file: /etc/rancher/k3s/join-token
+node-name: {{ inventory_hostname | to_json }}
+node-ip: {{ llama_k3s_node_ip | to_json }}
+flannel-iface: {{ llama_k3s_flannel_iface | to_json }}
+{% if inventory_hostname in groups['k3s_server'] %}
+bind-address: {{ llama_k3s_api_bind | to_json }}
+advertise-address: {{ llama_k3s_api_bind | to_json }}
+tls-san:
+  - {{ llama_k3s_api_bind | to_json }}
+write-kubeconfig-mode: "0600"
+cluster-cidr: {{ llama_k3s_cluster_cidr | to_json }}
+service-cidr: {{ llama_k3s_service_cidr | to_json }}
+secrets-encryption: true
+disable:
+  - traefik
+  - servicelb
+{% else %}
+server: {{ llama_k3s_server_url | to_json }}
+{% endif %}
