@@ -26,7 +26,7 @@
       - llama_cpus | string is match('^[1-9][0-9]*([.][0-9]+)?$')
       - llama_pvc is match('^[a-z0-9][a-z0-9-]*$')
       - llama_gateway_namespace is match('^[a-z0-9][a-z0-9-]*$')
-    when: llama_enable_workload | bool
+  when: llama_enable_workload | bool
 
 - name: Require explicit K3s topology and private interface configuration
   ansible.builtin.assert:
@@ -45,7 +45,7 @@
       - llama_k3s_version is match('^v1[.][0-9]+[.][0-9]+[+]k3s[0-9]+$')
       - llama_k3s_sha256 is match('^[a-f0-9]{64}$')
       - llama_k3s_server_url is match('^https://[A-Za-z0-9.-]+:6443$')
-    when: llama_runtime == 'k3s' and llama_manage_k3s | bool
+  when: llama_runtime == 'k3s' and llama_manage_k3s | bool
 
 - name: Require a private join secret
   ansible.builtin.assert:
