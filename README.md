@@ -4,7 +4,7 @@
 
 Explicit deployment of a private llama.cpp service with Docker Compose or a single-server K3s cluster and optional agents. The operator controls inventory, releases, resources, secrets and management connectivity.
 
-**Status: hardening candidate, not production acceptance.** Portable runtime/adapter/template tests and Ansible syntax checks are available. No live K3s cluster, GPU model inference, image build, reboot or end-to-end VPS installation was exercised for this revision.
+**Status: laboratory-accepted CPU Compose/K3s paths; production deployment remains unverified.** Source commit `b1d965b` passed real inference, repeat deployment, isolation and reboot recovery in a separate delivery lab. GPU inference, a custom image build and end-to-end VPS installation remain unverified. See [acceptance evidence](docs/acceptance-evidence.en.md) for exact commits, inputs and boundaries.
 
 ## What changed
 
